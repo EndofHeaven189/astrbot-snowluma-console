@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 前端
+web/node_modules/
+web/dist/
+
+# 运行时数据（永不提交）
+apps/
+instances/
+downloads/
+backups/
+logs/
+state/
+
+# 本地临时
+*.log
+.tmp_*
+
+# 打包产物（体积大，不入库）
+packaging/build/
+
