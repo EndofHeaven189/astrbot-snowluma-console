@@ -8,7 +8,6 @@ Python / Node / Docker 需要人工安装，这里返回明确指引而不是假
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +21,9 @@ from core.settings import get_settings
 
 router = APIRouter(prefix="/api/env", tags=["env"])
 
-NODE_DOWNLOAD = "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi"
+# FIX-AJ：SnowLuma lite 的 engines 是 ^24.22.1 || >=26.12.1，这里必须给满足下限的版本，
+# 以前给的是 v24.11.0，装完仍然低于 MIN_NODE_FOR_LITE，页面提示与下载链接自相矛盾。
+NODE_DOWNLOAD = "https://nodejs.org/dist/v24.22.1/node-v24.22.1-x64.msi"
 DOCKER_DOWNLOAD = "https://www.docker.com/products/docker-desktop/"
 PYTHON_DOWNLOAD = "https://www.python.org/downloads/windows/"
 
@@ -46,7 +47,7 @@ def _pip_host_python() -> Optional[str]:
 
 
 @router.get("/detect")
-async def detect(force: bool = Query(False, description="跳过 10 分钟缓存")) -> Dict[str, Any]:
+async def detect(force: bool = Query(False, description="跳过 20 秒检测缓存")) -> Dict[str, Any]:
     return await detect_environment(force=force)
 
 

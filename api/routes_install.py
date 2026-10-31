@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter
 
-from core.constants import DEPLOY_DOCKER, DEPLOY_UV, SERVICE_ASTRBOT, SERVICE_SNOWLUMA
+from core.constants import DEPLOY_DOCKER, DEPLOY_UV, SERVICE_ASTRBOT
 from core.credential.eula import acceptance_status, record_acceptance
 from core.errors import ConsoleError, PreconditionError
 from core.installer.astrbot import install_astrbot
@@ -48,7 +48,10 @@ async def install_astrbot_endpoint(payload: Optional[Dict[str, Any]] = None) -> 
     if data.get("dashboard_port") is not None:
         settings.update({"astrbot": {"dashboard_port": parse_port(data["dashboard_port"])}})
     if data.get("onebot_port") is not None:
-        settings.update({"astrbot": {"onebot_port": parse_port(data["onebot_port"])}})
+        # FIX-H：OneBot 端口的真源是 bridge.onebot_port。安装接口两处都写，
+        # 保证老配置（读 astrbot.onebot_port）与新配置拿到同一个值。
+        onebot_port = parse_port(data["onebot_port"])
+        settings.update({"bridge": {"onebot_port": onebot_port}, "astrbot": {"onebot_port": onebot_port}})
     settings.save()
 
     if route == DEPLOY_DOCKER:
@@ -149,7 +152,8 @@ async def install_snowluma_endpoint(payload: Optional[Dict[str, Any]] = None) ->
     try:
         from core.detector.env import latest_release
 
-        release = latest_release("SnowLuma/SnowLuma", layout=layout)
+        # FIX-AU：latest_release 是同步 HTTP 调用（最长 6 秒），不能卡住事件循环。
+        release = await asyncio.to_thread(latest_release, "SnowLuma/SnowLuma", layout=layout)
         version = (release or {}).get("tag") or (release or {}).get("version")
     except Exception:
         version = None

@@ -46,6 +46,28 @@ def pick_asset(release: Dict[str, Any], variant: str) -> Dict[str, Any]:
     )
 
 
+def _ensure_snowluma_stopped(layout: Layout) -> None:
+    """强制重装前确认 SnowLuma 没在运行（FIX-M）。
+
+    以前直接在运行中 rmtree，Windows 上会删一半停一半，留下半新半旧的 apps/SnowLuma。
+    """
+    try:
+        from core.service.factory import get_controller
+
+        controller = get_controller(SERVICE_SNOWLUMA, layout=layout)
+        if controller.status().running:
+            raise InstallError(
+                "SnowLuma 正在运行，无法强制重装",
+                hint="请先在「服务」页停止 SnowLuma，再勾选强制重装。",
+                detail={"service": SERVICE_SNOWLUMA,
+                        "pid": controller.status().pid},
+            )
+    except InstallError:
+        raise
+    except Exception:  # noqa: BLE001 - 状态探测失败不阻断，真正的失败由 rmtree 报出
+        pass
+
+
 def _safe_extract(zip_path: str, target: str) -> int:
     count = 0
     base = os.path.abspath(target)
@@ -134,7 +156,17 @@ async def install_snowluma(
 
     job.step("解压安装包", "run", "解压到 apps/SnowLuma")
     if os.path.isdir(installed_dir):
-        shutil.rmtree(installed_dir, ignore_errors=True)
+        # FIX-M / FIX-AQ：先确认没在运行，删除失败要明确报错而不是 ignore_errors 吞掉，
+        # 否则解压时继续写进半删除的目录，最后得到一个坏安装。
+        _ensure_snowluma_stopped(layout)
+        try:
+            shutil.rmtree(installed_dir)
+        except OSError as exc:
+            raise InstallError(
+                "无法删除旧的 apps/SnowLuma（文件可能被占用）",
+                hint="请先在「服务」页停止 SnowLuma（或结束进程）后重试强制重装。",
+                detail={"path": installed_dir, "error": str(exc)},
+            ) from exc
     os.makedirs(installed_dir, exist_ok=True)
     files = await __import__("asyncio").to_thread(_safe_extract, zip_path, installed_dir)
     launcher = os.path.join(installed_dir, "launcher.bat")

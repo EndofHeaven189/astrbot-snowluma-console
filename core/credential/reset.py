@@ -16,7 +16,7 @@ import json
 import re
 import secrets
 import string
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from core.constants import DEPLOY_DOCKER, LOOPBACK, PASSWORD_CAPTURED, SERVICE_ASTRBOT
 from core.credential.store import set_credential
@@ -40,8 +40,12 @@ _PWD_ALPHABET = string.ascii_letters + string.digits
 
 
 def generate_password(length: int = 16) -> str:
-    """生成满足 AstrBot 复杂度策略的随机密码。"""
-    body = [secrets.choice(_PWD_ALPHABET) for _ in range(max(length, 10) - 4)]
+    """生成满足 AstrBot 复杂度策略的随机密码。
+
+    FIX-AO：以前 body 取 length-4、core 再补 3 位，实际位数是 length-1。
+    现在补齐成正好 length 位（generate_password(16) 返回 16 个字符）。
+    """
+    body = [secrets.choice(_PWD_ALPHABET) for _ in range(max(length, 10) - 3)]
     core = ["A", "b", "7"] + body          # 保底大写/小写/数字
     secrets.SystemRandom().shuffle(core)
     return "".join(core)
@@ -82,6 +86,8 @@ async def reset_astrbot_password(
 
     adapter = get_platform()
     password = generate_password()
+    # FIX-O：只有 uv 路线会写 dashboard.username；先置空，后面按实际结果填。
+    username_error: Optional[Dict[str, Any]] = None
     # 注意：不要用 astrbot password —— 它没有非交互参数，
     # hide_input 走 getpass，在无 TTY 的子进程里会直接卡死。
     # astrbot conf set dashboard.password 才是非交互入口，且内部调用同一套哈希实现。
@@ -116,8 +122,10 @@ async def reset_astrbot_password(
                     "未找到 AstrBot 虚拟环境", hint="请先在「安装」页完成 uv/pip 路线安装"
                 )
             base = [python, "-m", "astrbot"]
-        # 用户名一起写，避免面板里还留着旧的 dashboard.username
-        code, out = adapter.run_capture(
+        # 用户名一起写，避免面板里还留着旧的 dashboard.username。
+        # FIX-O / FIX-BI：两次调用的返回码必须分开接，否则用户名设置的失败会被
+        # 下一行覆盖成「成功」，凭据库和面板状态就此对不上。
+        username_code, username_out = adapter.run_capture(
             base + ["conf", "set", "dashboard.username", DASHBOARD_USERNAME],
             cwd=project_dir,
             timeout=120,
@@ -127,11 +135,19 @@ async def reset_astrbot_password(
             cwd=project_dir,
             timeout=120,
         )
+        username_error = None
+        if username_code != 0:
+            # 不阻断密码写入，但必须记进 detail 让用户知道用户名没设上。
+            username_error = {
+                "exit_code": username_code,
+                "output": username_out[-400:],
+                "hint": "面板里可能仍是旧用户名，可手动执行 astrbot conf set dashboard.username astrbot",
+            }
         if code != 0:
             raise CredentialError(
                 "重置 AstrBot 密码失败",
                 hint="请检查 venv 内 astrbot 是否可用",
-                detail={"exit_code": code, "output": out[-800:]},
+                detail={"exit_code": code, "output": out[-800:], "username_error": username_error},
             )
         controller = get_controller(SERVICE_ASTRBOT, settings=settings, layout=layout)
         if controller.status().running:
@@ -152,6 +168,12 @@ async def reset_astrbot_password(
         if dashboard.get("username") and dashboard.get("username") != DASHBOARD_USERNAME:
             verified = False
 
+    if username_error:
+        hint = "用户名未能写入（exit=%s）；密码已更新" % username_error.get("exit_code")
+    elif verified is False:
+        hint = "CLI 执行成功，但 cmd_config.json 里没读到新的密码哈希，请检查 AstrBot 版本"
+    else:
+        hint = None
     entry = {
         "dashboard_password": password,
         "username": DASHBOARD_USERNAME,
@@ -169,7 +191,8 @@ async def reset_astrbot_password(
         "updated": True,
         "verified": verified,
         "raw_output": out[-1200:],
-        "hint": None if verified is not False else "CLI 执行成功，但 cmd_config.json 里没读到新的密码哈希，请检查 AstrBot 版本",
+        "username_error": username_error,
+        "hint": hint,
     }
 
 

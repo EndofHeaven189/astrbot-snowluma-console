@@ -106,11 +106,12 @@ export const api = {
   killResidual: (name: string) =>
     post<Record<string, any>>(`/api/service/${name}/kill-residual`),
   orphans: () =>
-    get<{ orphans: Record<string, OrphanEntry>; count: number; hint?: string | null }>(
+    // FIX-Q：后端返回的是数组，不是 { service: entry } 字典。
+    get<{ orphans: OrphanEntry[]; count: number; hint?: string | null }>(
       '/api/service/orphans',
     ),
   scanOrphans: () =>
-    post<{ orphans: Record<string, OrphanEntry>; count: number }>('/api/service/orphans/scan'),
+    post<{ orphans: OrphanEntry[]; count: number }>('/api/service/orphans/scan'),
   resolveOrphan: (name: string, action: 'kill' | 'adopt') =>
     post<Record<string, any>>(`/api/service/orphans/${name}/resolve`, { action }),
   stopService: (name: string) => post<Record<string, any>>(`/api/service/${name}/stop`),

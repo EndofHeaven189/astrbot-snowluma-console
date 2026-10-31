@@ -123,6 +123,9 @@ def check_file(rel: str) -> List[Dict[str, Any]]:
     def report(line: int, rule: str, message: str, snippet: str = "") -> None:
         problems.append({"file": rel.replace(os.sep, "/"), "line": line, "rule": rule, "message": message, "snippet": snippet})
 
+    # FIX-AA：f-string 的文本片段挂在 ast.JoinedStr.values 下，单独遍历一遍，
+    # 保证 f"http://127.0.0.1:{port}" 这类拼接也能被规则 6 命中。
+    strings: List[ast.Constant] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             name = _call_name(node.func)
@@ -131,17 +134,24 @@ def check_file(rel: str) -> List[Dict[str, Any]]:
             if name and name in PLATFORM_ONLY_CALLS and not in_platform:
                 report(node.lineno, "platform_only_call", f"{name}() 只能在 core/platform/ 内使用：{PLATFORM_ONLY_CALLS[name]}")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if id(node) in docstrings:
-                continue
-            value = node.value
-            if _is_drive_path(value) and not in_platform:
-                report(node.lineno, "drive_literal", f"盘符字面量 {value!r}：路径应由 core.paths.Layout 计算")
-            if _looks_like_loopback(value) and rel not in ALLOW_LOOPBACK and not rel.startswith(DEV_SCRIPTS):
-                report(node.lineno, "loopback_literal", f"回环地址字面量 {value!r}：请用 core.constants.LOOPBACK")
-            if not in_platform:
-                for word, hint in PLATFORM_ONLY_STRINGS.items():
-                    if word in value:
-                        report(node.lineno, "platform_only_string", f"字符串 {value!r} 含 {word!r}：{hint}")
+            strings.append(node)
+        elif isinstance(node, ast.JoinedStr):
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    strings.append(part)
+
+    for node in strings:
+        if id(node) in docstrings:
+            continue
+        value = node.value
+        if _is_drive_path(value) and not in_platform:
+            report(node.lineno, "drive_literal", f"盘符字面量 {value!r}：路径应由 core.paths.Layout 计算")
+        if _looks_like_loopback(value) and rel not in ALLOW_LOOPBACK and not rel.startswith(DEV_SCRIPTS):
+            report(node.lineno, "loopback_literal", f"回环地址字面量 {value!r}：请用 core.constants.LOOPBACK")
+        if not in_platform:
+            for word, hint in PLATFORM_ONLY_STRINGS.items():
+                if word in value:
+                    report(node.lineno, "platform_only_string", f"字符串 {value!r} 含 {word!r}：{hint}")
     return problems
 
 

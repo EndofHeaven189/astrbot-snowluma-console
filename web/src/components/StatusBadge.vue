@@ -13,7 +13,9 @@ const cls = computed(() => {
   if (s === 'running' || s === 'ok' || s === 'done') return 'badge badge-running breathe'
   if (s === 'starting' || s === 'stopping' || s === 'pending') return 'badge badge-warn'
   if (s === 'failed' || s === 'fail' || s === 'error' || s === 'crashed') return 'badge badge-error'
-  if (s === 'stopped' || s === 'idle' || s === 'warn') return 'badge badge-warn'
+  // FIX-AD：stopped 是正常状态，别用黄色警告色，和 idle 同色。
+  if (s === 'stopped' || s === 'idle') return 'badge badge-idle'
+  if (s === 'warn') return 'badge badge-warn'
   return 'badge badge-idle'
 })
 </script>

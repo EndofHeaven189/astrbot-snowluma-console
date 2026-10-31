@@ -60,6 +60,13 @@ const statusText = computed(() => {
 
 const canRenderToken = computed(() => Boolean(loginUrl.value) && statusOf.value !== 'unknown')
 
+// FIX-Z / FIX-BJ：面板端口读设置，不再硬编码 6185。
+const panelHost = computed(() => window.location.hostname || '127.0.0.1')
+const dashboardUrl = computed(() => {
+  const port = state.settings?.astrbot?.dashboard_port ?? 6185
+  return `http://${panelHost.value}:${port}`
+})
+
 async function load() {
   loading.value = true
   try {
@@ -106,9 +113,10 @@ async function recapture() {
   recapturing.value = true
   try {
     const res = await api.recaptureCredential(service.value)
-    const state = res.state || res.status?.job_state
-    if (res.captured || state === 'captured') toast.ok('已重新抓取到密码', '已写入凭据库')
-    else if (state === 'running') toast.info('后台正在扫日志', '窗口内命中会自动入库')
+    // FIX-BM：后端返回体顶层没有 state，抓取进度在 status.job_state。
+    const jobState = res.status?.job_state
+    if (res.captured || jobState === 'captured') toast.ok('已重新抓取到密码', '已写入凭据库')
+    else if (jobState === 'running') toast.info('后台正在扫日志', '窗口内命中会自动入库')
     else toast.error('暂未抓到密码', '可等待窗口结束，或改用手动粘贴')
     await load()
   } catch (err) {
@@ -137,7 +145,7 @@ async function submitManual() {
 async function resetAstrbot() {
   if (
     !window.confirm(
-      '重置 AstrBot 面板密码？\n\nuv 路线：在 venv 里执行 astrbot password 并重启进程；Docker 路线：docker exec + docker restart。',
+      '重置 AstrBot 面板密码？\n\nuv 路线：在 venv 里执行 astrbot conf set dashboard.password 并重启进程；Docker 路线：docker exec + docker restart。',
     )
   )
     return
@@ -279,7 +287,7 @@ onMounted(load)
       <dl class="kv">
         <dt>AstrBot 面板</dt>
         <dd class="mono">
-          <a v-if="service === 'astrbot'" href="http://127.0.0.1:6185" target="_blank" rel="noopener">http://127.0.0.1:6185</a>
+          <a v-if="service === 'astrbot'" :href="dashboardUrl" target="_blank" rel="noopener">{{ dashboardUrl }}</a>
           <span v-else>—</span>
         </dd>
         <dt>SnowLuma WebUI</dt>
@@ -290,7 +298,7 @@ onMounted(load)
         </dd>
       </dl>
       <div class="dim" style="font-size: 12px; margin-top: 10px">
-        SnowLuma 的免密登录链接形如 <span class="mono">http://127.0.0.1:5099/?token=&lt;一次性密码&gt;</span>。
+        SnowLuma 的免密登录链接形如 <span class="mono">{{ webuiUrl || '（WebUI 地址）' }}?token=&lt;一次性密码&gt;</span>。
         只有状态为「已抓取 / 用户维护」时才会渲染 <span class="mono">?token=</span>，未知密码时只给入口地址。
       </div>
       <div class="notice notice-warn" style="margin-top: 12px">

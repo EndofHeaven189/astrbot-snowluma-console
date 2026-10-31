@@ -3,6 +3,7 @@ import type { CheckItem } from '../api/types'
 
 defineProps<{ checks: CheckItem[] }>()
 
+/** 状态字段统一叫 status（FIX-E）。 */
 const cls = (s: string) => {
   if (s === 'ok') return 'badge badge-ok'
   if (s === 'warn') return 'badge badge-warn'
@@ -56,7 +57,7 @@ const fmt = (v: unknown): string => {
             {{ scopeLabel(c.scope) }}
           </div>
         </td>
-        <td><span :class="cls(c.state)">{{ label(c.state) }}</span></td>
+        <td><span :class="cls(c.status)">{{ label(c.status) }}</span></td>
         <td>
           <div>{{ fmt(c.value) }}</div>
           <div v-if="c.detail" class="dim" style="font-size: 11.5px">{{ c.detail }}</div>

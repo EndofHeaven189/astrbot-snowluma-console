@@ -14,7 +14,7 @@ from __future__ import annotations
 import atexit
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from core.constants import STOP_GRACE_SECONDS
 from core.platform import get_platform
@@ -65,7 +65,7 @@ def resolve_orphan(service: str, action: str = "kill") -> Dict[str, Any]:
                 adapter.graceful_stop(pid)
             except Exception:
                 pass
-            deadline = time.time() + STOP_GRACE_SECONDS
+            deadline = time.time() + _grace_seconds()
             while time.time() < deadline:
                 if not _alive(pid):
                     break
@@ -85,6 +85,16 @@ def _alive(pid: int) -> bool:
     adapter = get_platform()
     checker = getattr(adapter, "pid_alive", None)
     return bool(checker(pid)) if callable(checker) else False
+
+
+def _grace_seconds() -> float:
+    """FIX-I：读 settings.timeouts.stop_grace，atexit 场景下读不到就回落常量。"""
+    try:
+        from core.settings import get_settings
+
+        return float(get_settings().timeout("stop_grace"))
+    except Exception:  # noqa: BLE001 - 退出路径上任何异常都不能再抛
+        return float(STOP_GRACE_SECONDS)
 
 
 def reap_children(reason: str = "shutdown") -> List[Dict[str, Any]]:
@@ -119,7 +129,7 @@ def reap_children(reason: str = "shutdown") -> List[Dict[str, Any]]:
             adapter.graceful_stop(pid)
         except Exception:
             pass
-        deadline = time.time() + STOP_GRACE_SECONDS
+        deadline = time.time() + _grace_seconds()
         while time.time() < deadline:
             if not _alive(pid):
                 break

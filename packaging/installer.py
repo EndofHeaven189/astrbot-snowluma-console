@@ -172,10 +172,16 @@ def shortcut_paths() -> Dict[str, str]:
 
 # ------------------------------------------------------------------ 安装
 def _extract(archive: str, target: str, on_step: Callable[[str], None]) -> int:
+    base = os.path.abspath(target)
     with zipfile.ZipFile(archive) as zf:
         members = zf.infolist()
         total = len(members) or 1
         for index, member in enumerate(members, start=1):
+            # FIX-AE：与 core/installer/snowluma.py::_safe_extract 同一套规则，
+            # 拒绝 zip-slip（../ 或绝对路径）。之前直接 zf.extract，能把文件写到安装目录之外。
+            dest = os.path.abspath(os.path.join(base, member.filename))
+            if dest != base and not dest.startswith(base + os.sep):
+                raise RuntimeError(f"安装包内包含非法路径：{member.filename}")
             zf.extract(member, target)
             if index % 200 == 0 or index == total:
                 on_step(f"解压文件 {index}/{total}")
@@ -259,8 +265,10 @@ def uninstall(target: str, purge: bool = False) -> Dict[str, object]:
             removed.append(full)
             continue
         try:
+            # FIX-BP：不要 ignore_errors —— 删不掉时要走下面的 OSError 分支记日志，
+            # 而不是把没删掉的路径也记成「已删除」。
             if os.path.isdir(full):
-                shutil.rmtree(full, ignore_errors=True)
+                shutil.rmtree(full)
             else:
                 os.remove(full)
             removed.append(full)
@@ -356,7 +364,10 @@ def run_gui() -> int:
             result = install(target, desktop_shortcut=desktop, on_step=lambda m: root.after(0, step, m))
         except Exception as exc:  # noqa: BLE001
             log("安装失败：" + repr(exc))
-            root.after(0, lambda: fail(str(exc)))
+            # FIX-J：定位到 except 块结束后 exc 会被清掉，lambda 里再读 str(exc)
+            # 会抛 NameError，于是安装失败时界面既不弹窗也不复位按钮。先把消息取出来。
+            message = str(exc)
+            root.after(0, lambda: fail(message))
             return
         log("安装结果：" + repr(result))
 
@@ -453,7 +464,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.uninstall:
         report = uninstall(args.dir or default_install_dir(), purge=args.purge)
-        print(report if args.silent else repr(report))
+        # FIX-BH：silent 模式要被机器解析，应该输出 repr；非 silent 给人看，输出格式化文本。
+        print(repr(report) if args.silent else report)
         return 0
 
     if not args.silent:

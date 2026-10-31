@@ -17,6 +17,17 @@ const modeText = computed(() => {
 
 const running = computed(() => state.services.filter((s) => s.running).length)
 
+// FIX-BJ：面板/WebUI 端口读设置，subtitle 里不再写死 6185 / 5099。
+const dashboardPort = computed(() => state.settings?.astrbot?.dashboard_port ?? '—')
+const webuiPort = computed(() => state.settings?.snowluma?.webui_port ?? '—')
+
+// FIX-BK：以 SnowLuma 实际配置为主，控制器建议地址只作对照。
+const actualEndpoint = computed(() => bridge.value?.snowluma?.url || '')
+const suggestedEndpoint = computed(() => bridge.value?.endpoint?.url || '')
+const endpointMismatch = computed(
+  () => Boolean(actualEndpoint.value && suggestedEndpoint.value && actualEndpoint.value !== suggestedEndpoint.value),
+)
+
 async function loadBridge() {
   try {
     bridge.value = await api.bridgeStatus()
@@ -51,8 +62,8 @@ onMounted(loadBridge)
     </div>
 
     <div class="grid cols-2">
-      <ServiceCard name="astrbot" title="AstrBot" subtitle="机器人框架 · 面板 6185" icon="🤖" />
-      <ServiceCard name="snowluma" title="SnowLuma" subtitle="OneBot v11 协议端 · WebUI 5099" icon="❄️" />
+      <ServiceCard name="astrbot" title="AstrBot" :subtitle="`机器人框架 · 面板 ${dashboardPort}`" icon="🤖" />
+      <ServiceCard name="snowluma" title="SnowLuma" :subtitle="`OneBot v11 协议端 · WebUI ${webuiPort}`" icon="❄️" />
     </div>
 
     <div class="card">
@@ -80,14 +91,20 @@ onMounted(loadBridge)
           <dl class="kv">
             <dt>配置文件</dt>
             <dd class="mono">{{ bridge.snowluma.path || '未生成' }}</dd>
-            <dt>目标地址</dt>
-            <dd class="mono">{{ bridge.endpoint?.url || bridge.snowluma.url || '—' }}</dd>
+            <dt>目标地址（实际配置）</dt>
+            <dd class="mono">{{ actualEndpoint || '—' }}</dd>
+            <dt>建议地址</dt>
+            <dd class="mono">{{ suggestedEndpoint || '—' }}</dd>
             <dt>Token</dt>
             <dd>{{ bridge.snowluma.token_set ? '已设置' : '未设置' }}</dd>
           </dl>
         </div>
       </div>
       <div v-else class="empty">正在读取桥接状态…</div>
+      <div v-if="endpointMismatch" class="notice notice-warn" style="margin-top: 12px">
+        SnowLuma 实际连的是 <span class="mono">{{ actualEndpoint }}</span>，与控制台建议的
+        <span class="mono">{{ suggestedEndpoint }}</span> 不一致。请到「桥接」页点「一键对齐」后重启两个服务。
+      </div>
       <div v-if="bridge?.hint" class="notice notice-warn" style="margin-top: 12px">{{ bridge.hint }}</div>
     </div>
 

@@ -28,8 +28,9 @@ HISTORY_GLOB_PREFIX = "onebot_"
 def ensure_admin_password(layout: Optional[Layout] = None) -> str:
     """首次启动时注入的引导密码（SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD）。
 
-    注入成功的场景下这就是真实密码，状态记为 captured；
-    如果 SnowLuma 忽略了它、自己另生成一个，日志抓取会以 log-capture 覆盖掉。
+    FIX-G：注入时无法确认 SnowLuma 会不会采信这个值，所以状态统一记 unknown，
+    也不渲染 ?token=。只有日志抓取（capture_from_logs / credential.capture）
+    真实命中、或用户手动入库之后，才允许变成 captured / user_managed。
     """
     layout = layout or get_layout()
     entry = get_credential("snowluma", layout)
@@ -42,9 +43,9 @@ def ensure_admin_password(layout: Optional[Layout] = None) -> str:
         {
             "admin_password": pwd,
             "password_source": "bootstrap-env",
-            "password_status": PASSWORD_CAPTURED,
+            "password_status": PASSWORD_UNKNOWN,
+            "password_unknown_reason": "引导密码尚未被日志确认，SnowLuma 可能忽略它",
             "generated_at": now_iso(),
-            "login_url": login_url(pwd, layout),
         },
         layout=layout,
     )

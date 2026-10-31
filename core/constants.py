@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_NAME = "AstrBot × SnowLuma 集成控制台"
 APP_SHORT = "AstrBotConsole"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 # ---- 服务标识 -------------------------------------------------------------
 SERVICE_ASTRBOT = "astrbot"

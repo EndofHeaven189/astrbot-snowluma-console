@@ -33,6 +33,8 @@ def read_config(service: str) -> Dict[str, Any]:
     return {"service": service, "files": files}
 
 
+# FIX-AT：/snowluma/history 与 /{service}/{file_id} 都是 3 段路径，只靠「注册顺序」
+# 决定谁先命中。这条必须留在 read_config_file 之前，别调换顺序。
 @router.get("/snowluma/history")
 def snowluma_history() -> Dict[str, Any]:
     """SnowLuma 历史数据目录检测（FIX-05）。"""

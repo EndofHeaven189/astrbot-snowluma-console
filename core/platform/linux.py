@@ -142,8 +142,10 @@ class LinuxAdapter(PlatformAdapter):
         text = raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
         return text or None
 
-    def venv_executable(self, venv_dir: str, name: str) -> str:
-        return os.path.join(venv_dir, "bin", name)
+    def venv_executable(self, venv_dir: str, name: str) -> Optional[str]:
+        """venv 里的可执行文件；不存在返回 None（FIX-C）。"""
+        path = os.path.join(venv_dir, "bin", name)
+        return path if os.path.exists(path) else None
 
     # ---------------------------------------------------------------- 网络
     def check_port(self, port: int) -> Optional[str]:

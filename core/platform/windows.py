@@ -16,6 +16,7 @@ from core.platform.base import PlatformAdapter, ProcessHandle
 # Windows 创建参数
 CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NEW_CONSOLE = 0x00000010
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
@@ -68,13 +69,23 @@ class WindowsAdapter(PlatformAdapter):
         capture: bool = True,
         shell: bool = False,
         name: str = "",
+        graceful: bool = False,
     ) -> ProcessHandle:
         argv = list(cmd)
+        if graceful:
+            # FIX-L：带控制台的进程组，CTRL_BREAK 才有收件人。
+            # 控制台本身没挂控制台（打包成 GUI）时补 CREATE_NEW_CONSOLE，
+            # 否则子进程既收不到 CTRL_BREAK，taskkill 不带 /F 也没有窗口消息可发。
+            flags = CREATE_NEW_PROCESS_GROUP
+            if not self._has_console():
+                flags |= CREATE_NEW_CONSOLE
+        else:
+            flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
         kwargs: Dict[str, object] = {
             "cwd": cwd,
             "env": env,
             "stdin": subprocess.DEVNULL,
-            "creationflags": CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+            "creationflags": flags,
         }
         if capture:
             kwargs.update(
@@ -163,22 +174,43 @@ class WindowsAdapter(PlatformAdapter):
                     return line
         return None
 
-    def venv_executable(self, venv_dir: str, name: str) -> str:
-        """<venv>\\Scripts\\<name>.exe（FIX-01：解析集中在这里，业务代码不拼）。"""
+    def venv_executable(self, venv_dir: str, name: str) -> Optional[str]:
+        """<venv>\\Scripts\\<name>[.exe|.cmd|.bat]；**都不存在返回 None**（FIX-C）。"""
         scripts = os.path.join(venv_dir, "Scripts")
         for candidate in (name, name + ".exe", name + ".cmd", name + ".bat"):
             path = os.path.join(scripts, candidate)
             if os.path.exists(path):
                 return path
-        return os.path.join(scripts, name + ".exe")
+        return None
+
+    @staticmethod
+    def _has_console() -> bool:
+        """当前进程是否挂了控制台（决定子进程要不要单独开一个）。"""
+        try:
+            return bool(ctypes.windll.kernel32.GetConsoleWindow())  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            return True
 
     def pid_alive(self, pid: int) -> bool:
-        code, out = self.run_capture(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=15)
-        return str(pid) in out
+        """按 tasklist 的 PID 列精确比对（FIX-AS）。
+
+        以前用 `str(pid) in out` 做子串匹配：pid=123 会被 1234 命中，
+        于是把不属于本控制台的进程当成还活着。
+        """
+        if pid <= 0:
+            return False
+        code, out = self.run_capture(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], timeout=15
+        )
+        if code != 0:
+            return False
+        for line in (out or "").splitlines():
+            cells = [cell.strip().strip('"') for cell in line.split(",")]
+            if len(cells) >= 2 and cells[1].isdigit() and int(cells[1]) == pid:
+                return True
+        return False
 
     # ---------------------------------------------------------------- 网络
-    _NETSTAT_RE = re.compile(r"^\s*(TCP|UDP)\s+(\S+):(\d+)\s+(\S+)\s+(LISTENING|ESTABLISHED|\S+)?\s*(\d+)?", re.I)
-
     def _netstat(self) -> str:
         code, out = self.run_capture(["netstat", "-ano", "-p", "tcp"], timeout=20)
         return out if code == 0 else ""
@@ -265,11 +297,13 @@ class WindowsAdapter(PlatformAdapter):
                             continue
             except OSError:
                 continue
-        # 兜底：常见安装目录里探测可执行文件
-        for base in (
-            os.environ.get("ProgramFiles", r"C:\Program Files"),
-            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-        ):
+        # 兜底：常见安装目录里探测可执行文件。
+        # 盘符不写死（验收要求全局无盘符字面量），直接读系统环境变量。
+        program_files = os.environ.get("ProgramFiles") or os.environ.get("ProgramW6432")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)")
+        for base in (program_files, program_files_x86):
+            if not base:
+                continue
             exe = os.path.join(base, "Tencent", "QQNT", "QQ.exe")
             if os.path.exists(exe):
                 return "已安装（版本未知）"

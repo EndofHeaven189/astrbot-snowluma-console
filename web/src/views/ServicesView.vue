@@ -24,16 +24,16 @@ const readyUrl = computed(() => {
 })
 
 // ---- FIX-07：上次未正常退出留下的服务进程
-const orphans = ref<Record<string, OrphanEntry>>({})
-const orphanCount = computed(() => Object.keys(orphans.value).length)
-const orphanList = computed(() => Object.values(orphans.value))
+// FIX-Q：后端 /api/service/orphans 返回的是数组，不是对象字典。
+const orphanList = ref<OrphanEntry[]>([])
+const orphanCount = computed(() => orphanList.value.length)
 const scanning = ref(false)
 const resolving = ref<string | null>(null)
 
 async function loadOrphans() {
   try {
     const res = await api.orphans()
-    orphans.value = res.orphans || {}
+    orphanList.value = Array.isArray(res.orphans) ? res.orphans : []
   } catch {
     /* 忽略：老版本后端可能没有这个接口 */
   }
@@ -43,7 +43,7 @@ async function scanOrphans() {
   scanning.value = true
   try {
     const res = await api.scanOrphans()
-    orphans.value = res.orphans || {}
+    orphanList.value = Array.isArray(res.orphans) ? res.orphans : []
     toast.info('已重新扫描', `发现 ${res.count} 个残留服务进程`)
   } catch (err) {
     reportError('扫描失败', err)
@@ -104,7 +104,7 @@ onMounted(loadOrphans)
         <span class="mono dim" style="font-size: 12px">PID {{ item.pid }}</span>
         <span class="mono dim" style="font-size: 12px">端口 {{ item.port ?? '—' }}</span>
         <span class="mono dim" style="font-size: 12px; flex: 1 1 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-          {{ item.cmd || '' }}
+          {{ item.command || item.cmd || '' }}
         </span>
         <button class="btn btn-sm" :disabled="resolving === item.service + 'adopt'" @click="resolveOrphan(item.service, 'adopt')">
           接管
@@ -142,6 +142,7 @@ onMounted(loadOrphans)
         </button>
       </div>
 
+      <!-- FIX-BQ：LogPanel 内部已 watch(service)，不要再用 :key 触发重挂载 -->
       <LogPanel :service="logService" height="420px" />
     </div>
   </div>

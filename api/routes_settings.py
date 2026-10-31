@@ -6,19 +6,20 @@ deploy_mode 只允许通过 /api/install/astrbot 或 /api/install/astrbot/switch
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
 
 from core.credential.eula import (
     acceptance_status,
-    is_accepted,
     record_acceptance,
     revoke_acceptance,
 )
 from core.constants import DEPLOY_DOCKER, LOOPBACK
 from core.errors import ConsoleError, SettingsError
-from core.paths import get_layout, reset_layout
+from core.loghub import get_loghub
+from core.paths import Layout, get_layout
+from core.platform import get_platform
 from core.settings import get_settings
 
 from api.deps import body_dict, parse_bool, parse_port
@@ -62,6 +63,16 @@ def read_settings() -> Dict[str, Any]:
 @router.put("")
 def update_settings(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = body_dict(payload)
+    # FIX-AF / FIX-BA：点号键会绕过下面所有校验（Settings.update 曾按路径直接写），
+    # 所以先拒绝，再走校验。{"astrbot.deploy_mode": ...} 与 {"astrbot": {...}}
+    # 都必须 400 —— 前者是写法错误，后者由 _reject_protected 拦。
+    dotted = [key for key in data if "." in str(key)]
+    if dotted:
+        raise SettingsError(
+            "设置键不能包含点号",
+            hint='请传嵌套结构，例如 {"astrbot": {"dashboard_port": 6185}}',
+            detail={"keys": dotted},
+        )
     _reject_protected(data)
     settings = get_settings()
 
@@ -119,8 +130,20 @@ def update_settings(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if isinstance(lifecycle, dict) and "shutdown_child_processes" in lifecycle:
         lifecycle["shutdown_child_processes"] = parse_bool(lifecycle["shutdown_child_processes"], True)
 
+    # FIX-AZ：mirror.github 是拿去拼下载地址的，必须只接受 http(s) 前缀或空串。
+    mirror = data.get("mirror")
+    if isinstance(mirror, dict) and "github" in mirror:
+        proxy = str(mirror.get("github") or "").strip().rstrip("/")
+        if proxy and not proxy.lower().startswith(("http://", "https://")):
+            raise SettingsError(
+                "mirror.github 必须是 http(s) 前缀或空字符串",
+                hint="例如 https://ghfast.top；留空表示直连 GitHub。",
+                detail={"github": proxy},
+            )
+        mirror["github"] = proxy
+
+    # FIX-AX：settings.update() 内部已经落盘，这里不再重复 save()。
     merged = settings.update(data)
-    settings.save()
     return {"settings": merged, "saved": True}
 
 
@@ -195,14 +218,27 @@ def revoke() -> Dict[str, Any]:
 
 @router.post("/root")
 def change_root(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """切换数据根目录（不会迁移数据，只切换指向）。"""
+    """切换数据根目录（不会迁移数据，只切换指向）。
+
+    FIX-AL：以前先 reset_layout（改全局单例）再 ensure()，目标不可写时全局 Layout
+    已经指向新目录、bootstrap 却没更新，进程进入不一致状态。现在先用临时 Layout
+    验证可写，成功之后才 set_root_dir（它内部才 reset_layout + 重载设置）。
+    """
     data = body_dict(payload)
     root = str(data.get("root") or "").strip()
     if not root:
         raise SettingsError("请提供新的数据目录")
-    layout = reset_layout(root)
-    layout.ensure()
     settings = get_settings()
-    settings.set_root_dir(layout.root)
+    probe = Layout(root)
+    probe.ensure()
+    if not get_platform().is_writable(probe.root):
+        raise SettingsError(
+            "目标目录不可写，已保持原目录不变",
+            hint="换一个有写权限的目录，或检查安全软件是否拦截。",
+            detail={"root": probe.root},
+        )
+    layout = settings.set_root_dir(probe.root)
     settings.save()
+    # FIX-AM：日志目录也要跟着切，否则新目录的日志仍落在旧位置。
+    get_loghub().reset_log_dir(layout.logs)
     return {"root": layout.root, "dirs": layout.as_dict(), "hint": "旧目录数据未迁移，如需保留请手动拷贝 instances 目录"}

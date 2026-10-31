@@ -35,6 +35,15 @@ class LogHub:
         os.makedirs(path, exist_ok=True)
         self._log_dir = path
 
+    def reset_log_dir(self, path: str) -> None:
+        """切换数据根目录后重新绑定日志目录（FIX-AM）。
+
+        以前只有首次创建 LogHub 时才绑定，切 root 之后日志仍然写进旧目录。
+        已经打开的文件是逐行 open/close 的，所以改掉 _log_dir 即生效。
+        """
+        self.set_log_dir(path)
+        self.append("console", f"[loghub] 日志目录已切换为 {path}")
+
     # ---------------------------------------------------------------- 写入
     def append(self, service: str, line: str) -> None:
         text = strip_ansi(line.rstrip("\r\n"))

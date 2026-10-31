@@ -159,8 +159,12 @@ def begin_capture(service: str, timeout: float = 0.0) -> Dict[str, Any]:
                         return
                     time.sleep(2.0)
             except Exception:  # pragma: no cover - 抓取失败不能影响服务
+                # FIX-AC：闭包里的 job 是 begin_capture 的局部对象，不是 _JOBS 里那一个；
+                # 直接写 job["state"] 改的是影子副本，前端轮询永远是 running。
                 with _LOCK:
-                    job["state"] = "error"
+                    current = _JOBS.get(service)
+                    if current is not None:
+                        current["state"] = "error"
 
         thread = threading.Thread(target=_worker, name=f"capture-{service}", daemon=True)
         _WORKERS[service] = thread

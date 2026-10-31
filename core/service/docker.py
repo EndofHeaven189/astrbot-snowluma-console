@@ -290,6 +290,9 @@ class DockerComposeController(ServiceController):
         return {
             "route": self.deploy_mode,
             "dial_from": dial_from,
+            # 契约：未探测前 reachable 为 None，探测后由 resolve_bridge_endpoint 覆盖
+            "reachable": None,
+            "reason": None,
             "strategy": first["strategy"],
             "host": first["host"],
             "port": port,

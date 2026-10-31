@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
         <span class="dim" style="font-size: 12px">{{ job.title }} · 开始 {{ job.started_at }} · {{ job.elapsed.toFixed(1) }}s</span>
       </div>
       <div class="progress" style="margin-bottom: 12px">
-        <div class="progress-bar" :style="{ width: job.state === 'done' ? '100%' : job.steps.length ? Math.min(96, job.steps.filter((s) => s.state === 'done').length * 12 + 12) + '%' : '8%' }" />
+        <div class="progress-bar" :style="{ width: job.state === 'done' ? '100%' : job.steps.length ? Math.min(96, job.steps.filter((s) => s.state === 'ok' || s.state === 'skip').length * 12 + 12) + '%' : '8%' }" />
       </div>
       <div class="stack" style="gap: 6px">
         <div v-for="(s, i) in job.steps" :key="i" class="row" style="gap: 10px; align-items: flex-start">

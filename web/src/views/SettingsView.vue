@@ -102,13 +102,15 @@ async function saveAdvanced() {
       lifecycle: { shutdown_child_processes: form.shutdown_child },
     })
     if (form.network_mode !== prev) {
-      if (form.network_mode === 'host') {
-        const res = await api.bridgeFallback()
-        toast.ok('已切换为 network_mode: host', res.regenerated === false ? '（未生成 compose，AstrBot 可能还没装）' : 'compose 已重新生成，需重启 AstrBot')
-      } else {
-        const res = await api.networkMode('bridge')
-        toast.ok('已切回 bridge 模式', res.regenerated === false ? '' : 'compose 已重新生成，需重启 AstrBot')
-      }
+      // FIX-P / FIX-Y：网络模式统一走 /api/settings/network-mode（它返回真实的
+      // regenerated）。/api/bridge/fallback 只服务「Docker 桥接退路」，非 Docker 路线会 400，
+      // 而且它的返回体里没有 regenerated 字段。
+      const res = await api.networkMode(form.network_mode)
+      const suffix = res.regenerated ? 'compose 已重新生成，需重启 AstrBot' : '（未生成 compose，AstrBot 可能还没装）'
+      toast.ok(
+        form.network_mode === 'host' ? '已切换为 network_mode: host' : '已切回 bridge 模式',
+        suffix,
+      )
     } else {
       toast.ok('高级设置已保存')
     }
@@ -123,7 +125,8 @@ async function saveAdvanced() {
 
 async function changeRoot() {
   if (!rootInput.value.trim()) return
-  if (!window.confirm('切换数据目录到 ' + rootInput.value + '？\n\napps/downloads/backups/logs 会迁移，instances 不会被覆盖。')) return
+  // FIX-V：后端只切换指向，不迁移任何数据，文案必须一致。
+  if (!window.confirm('切换数据目录到 ' + rootInput.value + '？\n\n控制台只切换指向，不会迁移已有数据。\n如要保留原来的 instances/apps，请手动拷贝到新目录。')) return
   changingRoot.value = true
   try {
     const res = await api.changeRoot(rootInput.value.trim())

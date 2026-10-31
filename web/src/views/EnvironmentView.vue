@@ -12,11 +12,14 @@ const installing = ref<string | null>(null)
 
 const route = computed(() => result.value?.route || state.settings?.astrbot?.deploy_mode || null)
 const summary = computed(() => result.value?.summary)
+// 后端字段是 status（FIX-E），不是 state。
 const missing = computed(() =>
-  (result.value?.checks || []).filter((c) => c.state === 'fail').map((c) => c.id),
+  (result.value?.checks || []).filter((c) => c.status === 'fail').map((c) => c.id),
 )
 
-const installable = computed(() => (result.value?.checks || []).filter((c) => c.state === 'fail' && c.id === 'uv'))
+const installable = computed(
+  () => (result.value?.checks || []).filter((c) => c.status === 'fail' && c.id === 'uv'),
+)
 
 async function detect(force = false) {
   loading.value = true
@@ -45,14 +48,6 @@ async function installDeps() {
 
 onMounted(() => detect(false))
 
-const hintFor = (id: string): string | null => {
-  const map: Record<string, string> = {
-    python: 'https://www.python.org/downloads/windows/',
-    node: 'https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi',
-    docker: 'https://www.docker.com/products/docker-desktop/',
-  }
-  return map[id] || null
-}
 </script>
 
 <template>
@@ -97,7 +92,7 @@ const hintFor = (id: string): string | null => {
       </div>
 
       <div v-if="result" class="dim" style="font-size: 11.5px; margin-top: 10px">
-        检测时间 {{ result.detect_at || '—' }} · 数据目录 <span class="mono">{{ result.root }}</span>
+        检测时间 {{ result.checked_at || '—' }} · 数据目录 <span class="mono">{{ result.root }}</span>
       </div>
     </div>
 
@@ -112,11 +107,11 @@ const hintFor = (id: string): string | null => {
       <div class="stack">
         <div v-if="missing.includes('node')" class="notice notice-warn">
           Node.js 未满足：SnowLuma lite 要求 <b>Node ≥ 24.22.1</b>。
-          <a href="https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi" target="_blank" rel="noopener">下载 Node 24 LTS 安装包</a>
+          <a href="https://nodejs.org/dist/v24.22.1/node-v24.22.1-x64.msi" target="_blank" rel="noopener">下载 Node 24.22.1 安装包</a>
           —— 版本号不够会同样报错。
         </div>
         <div v-if="missing.includes('python')" class="notice notice-warn">
-          Python 未满足：需要 3.10+（推荐 3.11/3.12）。
+          Python 未满足：AstrBot 4.x 要求 <b>Python 3.12+</b>。
           <a href="https://www.python.org/downloads/windows/" target="_blank" rel="noopener">前往 python.org</a>
         </div>
         <div v-if="missing.includes('docker')" class="notice notice-warn">

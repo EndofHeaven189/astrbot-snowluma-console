@@ -50,12 +50,19 @@ def scan_ports(ports) -> "list[PortState]":
     return result
 
 
-def free_port(adapter: PlatformAdapter, start: int, limit: int = 50) -> int:
-    """从 start 开始找第一个空闲端口。"""
+def free_port(adapter: PlatformAdapter, start: int, limit: int = 50) -> Optional[int]:
+    """从 start 开始找第一个空闲端口；找不到返回 None（FIX-BF）。
+
+    以前找不到时返回 start，调用方拿 `结果 == start` 判断失败永远为假
+    （与 FIX-K / FIX-AP 同构）。
+    """
     for port in range(start, start + limit):
-        if adapter.check_port(port) is None:
-            return port
-    return start
+        try:
+            if adapter.check_port(port) is None:
+                return port
+        except Exception:
+            continue
+    return None
 
 
 __all__ = [

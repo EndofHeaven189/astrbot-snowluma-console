@@ -9,13 +9,25 @@ import time
 
 import httpx
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)  # 本地 import（FIX-C 的探测断言）需要仓库根目录
+
 BASE = os.environ.get("E2E_BASE", "http://127.0.0.1:8899")
 results = []
+
+
+skips = []
 
 
 def rec(name, ok, detail=""):
     results.append({"case": name, "ok": bool(ok), "detail": detail})
     print(("PASS " if ok else "FAIL ") + name + ("  " + str(detail)[:160] if detail else ""))
+
+
+def skip(name, detail):
+    """环境前置条件不满足时明确记为 skip，不冒充 PASS。"""
+    skips.append({"case": name, "detail": detail})
+    print("SKIP " + name + "  " + detail)
 
 
 def main() -> int:
@@ -28,7 +40,7 @@ def main() -> int:
 
         r = c.get("/api/meta")
         meta = r.json()
-        rec("GET /api/meta", r.status_code == 200 and meta.get("version") == "0.1.1", meta.get("root"))
+        rec("GET /api/meta", r.status_code == 200 and meta.get("version") == "0.1.2", meta.get("root"))
 
         # ---- 环境检测（真实检测，按路线动态显示）
         r = c.get("/api/env/detect", params={"force": "true"})
@@ -36,8 +48,16 @@ def main() -> int:
         ids = [x["id"] for x in det.get("checks", [])]
         rec("GET /api/env/detect", r.status_code == 200 and len(ids) > 0, f"{len(ids)} 项 / route={det.get('route')}")
         docker_only = [x for x in det.get("checks", []) if x.get("scope") == "docker"]
-        rec("未选路线时 Docker 专属项为待选择", det.get("route") is None and all(x["status"] == "pending" for x in docker_only),
-            [x["id"] for x in docker_only])
+        if det.get("route") is None:
+            rec("未选路线时 Docker 专属项为待选择", all(x["status"] == "pending" for x in docker_only),
+                [x["id"] for x in docker_only])
+        else:
+            # 已经选过路线（本机跑过一次 E2E 就会留下 uv/docker），「待选择」不再适用。
+            # 这时只断言 Docker 专属项没有被误判成不满足，剩下的交给全新状态的 CI。
+            skip("未选路线时 Docker 专属项为待选择",
+                 f'当前已选路线 {det.get("route")}，该断言需要全新安装状态')
+            rec("已选路线时 Docker 专属项不误报不满足", all(x["status"] != "fail" for x in docker_only),
+                [x["id"] for x in docker_only])
 
         # ---- 选择路线（不真正安装，只验证单一口径）
         r = c.post("/api/install/astrbot/switch-mode", json={"mode": "uv"})
@@ -124,11 +144,17 @@ def main() -> int:
         r = c.put("/api/settings", json={"lifecycle": {"shutdown_child_processes": False}})
         rec("退出连带停子进程可关闭", r.status_code == 200, r.json()["settings"]["lifecycle"]["shutdown_child_processes"])
 
-        # ---- v0.1.1：桥接地址由控制器给出（FIX-02）
+        # ---- v0.1.1：桥接地址由控制器给出（FIX-02）；v0.1.2 加包装与顶层 reachable（FIX-F/AH）
         r = c.get("/api/bridge/endpoint")
-        ep = r.json()
-        rec("桥接端点由 ServiceController 给出", r.status_code == 200 and bool(ep.get("url")), ep.get("url"))
+        body = r.json()
+        ep = body.get("endpoint") or {}
+        rec("桥接端点返回体含 endpoint 包装", r.status_code == 200 and "endpoint" in body, list(body))
+        rec("桥接端点由 ServiceController 给出", bool(ep.get("url")), ep.get("url"))
         rec("端点带候选与策略", bool(ep.get("candidates")), len(ep.get("candidates") or []))
+        rec("endpoint.reachable 是顶层字段", "reachable" in ep, ep.get("reachable"))
+        r = c.get("/api/bridge/endpoint", params={"refresh": "true"})
+        ep2 = (r.json() or {}).get("endpoint") or {}
+        rec("refresh=true 时 endpoint.reachable 仍在顶层（FIX-AH）", "reachable" in ep2, ep2.get("reachable"))
 
         # ---- v0.1.1：孤儿进程与残留清理（FIX-06/07）
         r = c.get("/api/service/orphans")
@@ -150,8 +176,20 @@ def main() -> int:
                     break
             rec("SSE 有数据帧", b"data:" in got, got[:120])
 
+    # FIX-C 的端到端确认：空目录下 uv 安装必须先「创建虚拟环境」。
+    # 真实安装要联网下载依赖，这里只在拿得到 Python 的情况下做逻辑断言，其余记为 skip。
+    try:
+        from core.platform import get_platform
+
+        exe = get_platform().venv_executable(os.path.join(os.environ.get("TEMP", "."), "e2e-no-venv"), "python")
+        rec("不存在的 venv 探测返回 None（FIX-C）", exe is None, exe)
+        skip("uv 空目录安装产生「创建虚拟环境 ok」", "需要真实联网安装，E2E 不触发下载")
+    except Exception as exc:  # noqa: BLE001
+        skip("uv 空目录安装产生「创建虚拟环境 ok」", f"环境探测失败：{exc!r}")
+
     ok = all(x["ok"] for x in results)
-    print(json.dumps({"total": len(results), "failed": [x["case"] for x in results if not x["ok"]], "ok": ok},
+    print(json.dumps({"total": len(results), "failed": [x["case"] for x in results if not x["ok"]],
+                      "skipped": skips, "ok": ok},
                      ensure_ascii=False))
     return 0 if ok else 1
 

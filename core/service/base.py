@@ -98,6 +98,9 @@ class ServiceController(ABC):
             "port": port,
             "url": url,
             "strategy": "loopback",
+            # 契约：reachable 始终存在（未探测时为 None），前端读 endpoint.reachable 不会 undefined
+            "reachable": None,
+            "reason": None,
             "candidates": [{"host": host, "reachable": None}],
             "note": "服务与本机在同一网络命名空间，直接用回环地址。",
         }

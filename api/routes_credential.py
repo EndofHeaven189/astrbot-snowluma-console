@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Query
 
-from core.constants import SERVICE_ASTRBOT, SERVICE_SNOWLUMA
+from core.constants import SERVICE_SNOWLUMA
 from core.credential import capture as credential_capture
 from core.credential import store as credential_store
 from core.credential.reset import reset_astrbot_password
@@ -18,7 +18,7 @@ from core.credential.snowluma import detect_history, login_url, sync_login_url, 
 from core.errors import CredentialError, PreconditionError
 from core.paths import get_layout
 
-from api.deps import guard_service, parse_bool
+from api.deps import guard_service
 
 router = APIRouter(prefix="/api/credential", tags=["credential"])
 

@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.constants import (
     ASTRBOT_DOCKER_IMAGE,
-    ASTRBOT_REPO,
     DEPLOY_DOCKER,
     DEPLOY_UV,
     DOCKER_HOST_ALIAS,
@@ -22,15 +21,14 @@ from core.constants import (
     MIRROR_PIP_HOST,
     MIN_PYTHON,
 )
-from core.detector.env import latest_release
 from core.errors import InstallError
 from core.installer.jobs import Job
 from core.paths import Layout, get_layout
 from core.platform import get_platform
 from core.pythonenv import collect, probe_version
-from core.service.factory import venv_python_exe
+from core.service.factory import venv_astrbot_exe, venv_python_exe
 from core.settings import Settings, get_settings
-from core.utils import atomic_write_text, now_iso, parse_version
+from core.utils import atomic_write_text
 
 # AstrBot 4.29.3 在 PyPI 上声明 requires_python ">=3.12"。低于这个版本 pip 不会立刻报错，
 # 而是回填老版本依赖直到十几分钟后才失败，所以安装前先按 3.12 拦一道。
@@ -88,7 +86,9 @@ def _compose_text(layout: Layout, settings: Settings) -> str:
     高级设置里切到 host 网络时，反过来只保留 network_mode: host（不能再映射端口）。
     """
     dashboard_port = int(settings.get("astrbot.dashboard_port", 6185))
-    onebot_port = int(settings.get("bridge.onebot_port", 6199))
+    # FIX-H / FIX-BB：容器内外用同一个端口变量。宿主侧写 7000 而容器侧仍固定 6199，
+    # 会把端口映射直接落空（容器里 AstrBot 监听的是 cmd_config 里的 ws_reverse_port）。
+    onebot_port = settings.onebot_port()
     data_dir = layout.astrbot_data.replace("\\", "/")
     network_mode = str(settings.get("astrbot.docker_network_mode", "bridge") or "bridge")
     lines = [
@@ -103,7 +103,7 @@ def _compose_text(layout: Layout, settings: Settings) -> str:
     else:
         lines.append("    ports:")
         lines.append(f'      - "{dashboard_port}:6185"')
-        lines.append(f'      - "{onebot_port}:6199"')
+        lines.append(f'      - "{onebot_port}:{onebot_port}"')
         lines.append("    extra_hosts:")
         lines.append(f'      - "{DOCKER_HOST_ALIAS}:host-gateway"')
     lines.append("    volumes:")
@@ -112,8 +112,15 @@ def _compose_text(layout: Layout, settings: Settings) -> str:
 
 
 def write_compose(layout: Layout, settings: Settings) -> str:
-    """把当前设置渲染成 compose 文件（FIX-02 切换网络退路后重新生成）。"""
-    compose_path = write_compose(layout, settings)
+    """把当前设置渲染成 compose 文件（FIX-02 切换网络退路后重新生成）。
+
+    FIX-B：v0.1.1 这里自己调用自己（`compose_path = write_compose(...)`），
+    必然 RecursionError，导致 /api/bridge/fallback 与 /api/settings/network-mode 全部 500。
+    现在真正落盘并返回路径。
+    """
+    compose_path = layout.astrbot_compose_file
+    os.makedirs(os.path.dirname(compose_path) or ".", exist_ok=True)
+    atomic_write_text(compose_path, _compose_text(layout, settings))
     return compose_path
 
 async def install_astrbot(

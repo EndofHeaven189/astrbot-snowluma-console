@@ -34,7 +34,10 @@ class ConsoleError(Exception):
             self.http_status = int(http_status)
 
     def to_dict(self) -> Dict[str, Any]:
+        # FIX-T：与 main.py 里另外两个 handler 的响应结构对齐（都带 ok:false），
+        # 前端只判断 payload.ok 时不会把业务错误当成成功。
         return {
+            "ok": False,
             "code": self.code,
             "message": self.message,
             "hint": self.hint,

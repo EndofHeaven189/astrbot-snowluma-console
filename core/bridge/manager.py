@@ -10,12 +10,11 @@ ws://127.0.0.1:6199/ws 的客户端，accessToken 与 AstrBot 一致。
 from __future__ import annotations
 
 import asyncio
-import os
 import secrets
 from typing import Any, Dict, List, Optional
 
 from core.config.store import ConfigStore, get_config_store
-from core.constants import DEPLOY_DOCKER, LOOPBACK, PORT_ONEBOT, SERVICE_ASTRBOT, SERVICE_SNOWLUMA
+from core.constants import DEPLOY_DOCKER, LOOPBACK, SERVICE_ASTRBOT, SERVICE_SNOWLUMA
 from core.errors import BridgeError
 from core.paths import Layout, get_layout
 from core.settings import Settings, get_settings
@@ -42,11 +41,30 @@ def _find_aiocqhttp(items: List[Any]) -> Optional[Dict[str, Any]]:
 def _ensure_aiocqhttp(config: Dict[str, Any], token: str, port: int) -> Dict[str, Any]:
     items = _platform_list(config)
     if items is None:
-        for key in ASTRBOT_PLATFORM_KEYS:
-            if key not in config:
+        # FIX-N：platform 键存在但不是 list（例如被手工改成了 dict）时，
+        # 以前直接抛「配置结构无法识别」。空的 dict 视为「还没有平台」，换成 []；
+        # 非空的就明确拒绝，并把可操作指引放进 detail / hint，而不是让用户猜。
+        present = [(key, config.get(key)) for key in ASTRBOT_PLATFORM_KEYS if key in config]
+        if not present:
+            for key in ASTRBOT_PLATFORM_KEYS:
+                if key not in config:
+                    config[key] = []
+                    items = config[key]
+                    break
+        else:
+            key, value = present[0]
+            if isinstance(value, dict) and not value:
                 config[key] = []
                 items = config[key]
-                break
+            else:
+                raise BridgeError(
+                    f"AstrBot 配置里的 {key} 不是数组，无法安全写入 aiocqhttp",
+                    hint=(
+                        f"请到 AstrBot 面板 → 配置 → 平台适配器里手动添加一个 aiocqhttp（OneBot v11），"
+                        f"或先把 cmd_config.json 的 {key} 改回数组再点「一键对齐」。"
+                    ),
+                    detail={"key": key, "type": type(value).__name__, "value": str(value)[:300]},
+                )
     if items is None:
         raise BridgeError("AstrBot 配置结构无法识别（找不到 platform 列表）")
     item = _find_aiocqhttp(items)
@@ -225,7 +243,8 @@ def bridge_status(
     store = get_config_store(layout, settings)
     astrbot = _inspect_astrbot(store)
     snowluma = _inspect_snowluma(store)
-    port = int(settings.get("bridge.onebot_port", PORT_ONEBOT))
+    # FIX-H：OneBot 端口只认 settings.onebot_port()（bridge.onebot_port 优先）
+    port = settings.onebot_port()
     token_set = bool(settings.get("bridge.token"))
     consistent = bool(
         astrbot.get("configured")
@@ -265,7 +284,7 @@ def apply_bridge(
     layout = layout or get_layout()
     store = get_config_store(layout, settings)
 
-    port = int(onebot_port or settings.get("bridge.onebot_port", PORT_ONEBOT))
+    port = int(onebot_port or settings.onebot_port())
     if port <= 0 or port > 65535:
         raise BridgeError("OneBot 端口不合法", detail={"port": port})
     token = (token if token is not None else settings.get("bridge.token")) or ""
@@ -303,7 +322,8 @@ def apply_bridge(
         SERVICE_SNOWLUMA, "onebot", snowluma_data, reason="bridge-apply"
     )
 
-    settings.update({"bridge.token": token, "bridge.onebot_port": port})
+    # 注意：Settings.update 只接受嵌套结构，带点号的键会被拒绝（FIX-AF）。
+    settings.update({"bridge": {"token": token, "onebot_port": port}})
     settings.save()
     results["token"] = token
     results["restart_required"] = True
@@ -333,7 +353,7 @@ async def verify_bridge(
     """连通性校验（FIX-02）：按部署形态给不同的失败文案与排查项。"""
     settings = settings or get_settings()
     layout = layout or get_layout()
-    port = int(settings.get("bridge.onebot_port", PORT_ONEBOT))
+    port = settings.onebot_port()
     endpoint = bridge_endpoint(settings, layout)
     mode = settings.astrbot_deploy_mode()
     probe = await _tcp_probe(LOOPBACK, port)

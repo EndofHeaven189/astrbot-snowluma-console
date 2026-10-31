@@ -44,6 +44,7 @@ async def download_file(
         req_headers = dict(headers)
         if done:
             req_headers["Range"] = f"bytes={done}-"
+        stream_completed = False
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout, read=stall_seconds),
@@ -83,8 +84,12 @@ async def download_file(
                                 on_progress(done, total)
                     if on_progress:
                         on_progress(done, total)
+            # 走到这里说明响应流正常读完（没有异常、没有提前 break）
+            stream_completed = True
             size_now = os.path.getsize(tmp) if os.path.exists(tmp) else 0
-            if not total or size_now >= total:
+            # FIX-BO：total 未知时以前第一次就 break，等于「没拿到 Content-Length
+            # 就直接当成功」。现在把「流正常读完」作为唯一成功判据。
+            if stream_completed and (not total or size_now >= total):
                 break
             errors.append(f"第 {attempt} 次下载中断（{size_now}/{total} 字节）")
         except InstallError:

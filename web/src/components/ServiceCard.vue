@@ -92,7 +92,8 @@ async function refresh() {
 }
 
 const openPanel = () => {
-  const url = svc.value?.url || loginUrl.value || rawState.snowlumaLoginUrl
+  // FIX-BL：优先带 token 的免密链接，再退回服务地址。
+  const url = loginUrl.value || rawState.snowlumaLoginUrl || svc.value?.url
   if (url) window.open(url, '_blank', 'noopener')
 }
 

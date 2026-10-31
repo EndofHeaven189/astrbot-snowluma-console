@@ -1,4 +1,4 @@
-# AstrBot × SnowLuma 集成控制台（v0.1.1）
+# AstrBot × SnowLuma 集成控制台（v0.1.2）
 
 一个只在本机运行的单端口 Web 控制台，把 **AstrBot（机器人框架）** 与 **SnowLuma（OneBot v11 协议端）** 的安装、配置、启停、凭据和桥接连成一个流程，免除手动抄端口、抄 token 的苦活。
 
@@ -8,7 +8,7 @@
 - 默认地址：<http://127.0.0.1:8765>
 - 目标平台：Windows 10/11 x64；Linux 通过 LinuxAdapter 留好扩展位（未实现）
 
-> **v0.1.1**：修掉七类真问题——uv 安装落点、Docker 桥接地址、首启超时与就绪判定、一次性密码抓取窗口、SnowLuma 历史目录静默无密码、进程树残留、控制台退出后子进程成孤儿。逐条对照见文末「v0.1.1 修了什么」。
+> **v0.1.2**：修掉 70 处缺陷，其中 4 处导致安装/桥接/网络退路/端口判定直接不可用——`write_compose()` 自我递归、`_install_uv()` 未定义名、`venv_executable()` 永远返回不存在的路径、端口占用检测恒判空闲。逐条对照见文末「v0.1.2 修了什么」，上一版内容保留在「v0.1.1 修了什么」。
 
 ## 快速开始
 
@@ -156,7 +156,45 @@ kzt/
 - **桥接**：AstrBot 侧 `aiocqhttp` 开 6199 + token，SnowLuma 侧 `wsClients[0].url = ws://127.0.0.1:6199/ws`；重启 AstrBot 后 6199 处于 LISTENING，`/api/bridge/verify` 返回 `ok: true`。
 - **持久化**：只重启控制台进程，两侧凭据、`deploy_mode`、桥接 token 全部还在。
 - **路线切换**：uv → docker（本机无 Docker，检测项给出 missing）→ 切回 uv，`instances/` 不动、不用重装。
-- **回归脚本**：`python scripts/e2e_api.py` 43 项全过；`python scripts/acceptance_check.py` 返回 `ok: true`（无禁止写法、40 条路由齐全、deploy_mode 单一来源、web/dist 存在）；`python scripts/check_abstraction.py` 扫描 52 个 Python 文件、0 告警。
+- **回归脚本（v0.1.2 实测）**：`python -m pyflakes core api main.py packaging scripts` 零告警；`python scripts/check_abstraction.py --text` 扫描 52 个 Python 文件、0 告警；`python scripts/acceptance_check.py` 返回 `ok: true`（14 组检查：禁止写法、路由齐全、deploy_mode 单一来源、web/dist、前后端契约、compose/venv 语义冒烟、端口检测、点号键绕过、compose 端口一致、密码位数、还原越界）；`python scripts/e2e_api.py` 47 项：45 PASS + 2 SKIP，SKIP 分别是「需要全新安装状态」与「需要真实联网安装」，都带明确理由，不再冒充通过。- **CI 心智（v0.1.2 起）**：流水线增加 `pyflakes` 与前后端契约断言（`CheckItem` / `DetectResult` 字段必须与 `web/src/api/types.ts` 一致），契约错位在提交时就会被拦下。
+
+## v0.1.2 修了什么
+
+需求方 v0.1.2 文档里的 FIX-A ~ FIX-BQ 全部落地。P3 的 37 条属性相同（契约错位、文案与实现不符、一致性），合并成一行，明细在该行里列出编号。
+
+| 编号 | 问题 | 修法 |
+| --- | --- | --- |
+| FIX-A | installer/astrbot.py 用了 venv_astrbot_exe 却没导入，uv 安装跑到最后必 NameError | 补上导入，不改走其它方式 |
+| FIX-B | write_compose() 第一行自我调用，必 RecursionError；/api/bridge/fallback 与 /api/settings/network-mode 全废 | 真正落盘 layout.astrbot_compose_file 并返回路径，两个调用点恢复可用 |
+| FIX-C | venv_executable() 四个候选都不存在时仍返回拼好的路径，「恒非 None」导致空目录不建 venv | 两个适配器改成找不到真实文件就返回 None；连带修掉「创建虚拟环境 skip + uv pip install 指向不存在的解释器」 |
+| FIX-D | 端口占用检测把 Optional[str] 当 PortState 用，占用端口恒判「空闲」 | 改用平台层 scan_ports()，占用判 warn 并带进程名与 PID |
+| FIX-E | 前端读 state，后端给 status → 状态列空白、一键装 uv 永不出现 | 以后端为准统一 status（types.ts + CheckList + EnvironmentView），并加契约断言 |
+| FIX-F / AH | /api/bridge/endpoint 裸返回，前端 res.endpoint 恒 undefined；容器内探测结果只躺在 resolved 里 | 包一层 {endpoint: ...}，并把 resolved 的 reachable/reason/strategy/url 合并进顶层 |
+| FIX-G | SnowLuma 引导密码在构造控制器时就置 captured，服务没跑过就渲染 ?token= 随机串 | 改惰性求值，只在真正启动前生成；未抓取前状态一律 unknown、不渲染 token 链接 |
+| FIX-H / BB | OneBot 端口有 astrbot/bridge 两个真源；compose 容器内侧还写死 6199（设 7000 时映射落空） | 统一读 bridge.onebot_port（回落 astrbot 再回落常量），安装时两处同写，compose 用 port:port |
+| FIX-I | timeouts.stop_grace 不生效，停止宽限写死常量 | 停止宽限读设置、缺省回落常量，atexit 场景包 try |
+| FIX-J | GUI 安装器 root.after(0, lambda: fail(str(exc))) 延迟执行时 exc 已被删除 | 先取 message 再传 lambda |
+| FIX-K / AP | _pick_port 的返回值与 port 比较恒假，端口冲突时误报 | 找不到时返回 None，调用方打印「附近也没有可用端口」并 return 1 |
+| FIX-L | spawn 用 CREATE_NO_WINDOW，CTRL_BREAK 与不带 /F 的 taskkill 都无效，每次停止白等 10 秒 | PlatformAdapter 增加 graceful 语义：需要优雅退出的进程带控制台 + 新进程组拉起 |
+| FIX-M | SnowLuma 运行中被 force 重装，ignore_errors 静默删半旧目录 | 重装前检查运行状态，运行中抛 InstallError 并引导先停服务 |
+| FIX-N | _ensure_aiocqhttp 遇到非 list 直接报「配置结构无法识别」 | 空 dict 归一成 []；其余情况给出可操作 hint 并把原值放进 detail |
+| FIX-O / BI | 写 dashboard.username 的返回码被下一行覆盖，失败被静默吞掉 | 两次 run_capture 分开接收、各自判 code；失败记进 detail 但不阻断密码写入 |
+| FIX-P / Y | 非 Docker 路线保存设置会调 /api/bridge/fallback（400），且 fallback 返回体没有 regenerated | 统一走 /api/settings/network-mode，用它的 regenerated 判断，fallback 只留给桥接页 |
+| FIX-AF / BA | PUT /api/settings 的点号键绕过全部校验（deploy_mode、console.host、console.port、timeouts 都能写穿） | 含 . 的键一律 400，必须传嵌套结构；这是安全边界 |
+| FIX-AG | find_process_by_port 六处调用无兜底，适配器一抛错 status/start/kill_residual 全变 501 | 统一 _safe_port_owner() 兜底（失败按无人占用处理并记日志），业务判断先于端口探测 |
+| FIX-AI | 控制台端口用常量而非设置值，「由本控制台占用」判定失效 | 读 console.port 并按实际端口比对 |
+| FIX-AJ | Node 下载链接是 v24.11.0，低于 MIN_NODE_FOR_LITE | 改 v24.22.1，与提示文案一致 |
+| FIX-AK | Python 提示写 3.10+，实际要求 3.12+ | 改文案 |
+| FIX-AL | change_root 先改全局单例再校验，不可写时进程进入不一致状态 | 先建临时 Layout 验证可写，成功后再切 |
+| FIX-AM | 切根目录后日志仍写旧目录（loghub 只在首次创建时绑定） | 加 reset_log_dir()，切换后显式调用 |
+| FIX-AN | 还原直接取备份里的 _meta.file，可写到布局之外 | 校验目标必须落在 root 内，否则抛 BackupError |
+| FIX-AO | generate_password(16) 实际只有 15 位 | 修长度计算，正好 16 位 |
+| FIX-AQ | force 重装的 rmtree(ignore_errors=True) 在文件被占用时静默留半旧目录 | 去掉 ignore_errors，失败即 InstallError |
+| FIX-BC | check_single_source_of_truth() 的结果从不进 problems，是死检查 | 结果并入 problems，并加元自检：每个检查键必须有判定分支 |
+| FIX-BD | 盘符正则多转义了一层，C:\Users\foo 实际不命中 | 改成 [A-Za-z]:[\\/]{1,2}(Users/Program/Windows) |
+| FIX-BO | 无 Content-Length 时 not total 直接 break，半截下载（>1KB）被当成功 | 以「流正常读完」为唯一成功判据 |
+| FIX-BP | 卸载 rmtree(ignore_errors=True) 静默失败仍计入 removed | 去掉 ignore_errors，失败记日志且不计入 |
+| 契约、文案与一致性（37 处） | P3 的 37 条：前端读错字段名、状态色不对、端口/链接写死、注释与实现不符等 | 补齐 Q/R/S/T/U/V/W/X/Y/Z、AA–AE、AR–AZ、BE、BF、BG、BH、BI、BJ、BK、BL、BM、BN、BO、BP、BQ |
 
 ## v0.1.1 修了什么
 

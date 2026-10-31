@@ -25,6 +25,7 @@ from core.constants import (
     DEPLOY_MODES,
     DEPLOY_UV,
     LOOPBACK,
+    PORT_ONEBOT,
 )
 from core.errors import SettingsError
 from core.paths import Layout, get_layout, reset_layout, write_bootstrap
@@ -176,29 +177,23 @@ class Settings:
     def update(self, patch: Dict[str, Any]) -> Dict[str, Any]:
         """深合并写入；不会因为部分字段缺失而丢数据。
 
-        key 里带点的（"bridge.token"）按路径写入，和 get() 的读法对称——
-        否则会写成一个字面量键 "bridge.token"，读的时候永远取不到。
+        FIX-AF / FIX-BA：这里以前对含点号的键走 _set_path 直接写，等于绕过了
+        PUT /api/settings 的全部校验（deploy_mode 保护、console.host 白名单、
+        端口范围、超时边界都能被 `{"bridge.token": ...}` 这种写法改掉）。
+        现在只接受嵌套结构；带点号的键一律拒绝，调用方负责先展开。
         """
         with _LOCK:
             for key, value in (patch or {}).items():
-                if "." in key and isinstance(value, (str, int, float, bool, type(None))):
-                    self._set_path(key, value)
-                else:
-                    self._data = _deep_merge(self._data, {key: value})
+                if "." in str(key):
+                    raise SettingsError(
+                        f"设置键不能包含点号：{key}",
+                        hint='请传嵌套结构，例如 {"bridge": {"token": "..."}}，不要用 bridge.token',
+                        detail={"key": key},
+                    )
+                self._data = _deep_merge(self._data, {key: value})
             self._save_locked()
             return copy.deepcopy(self._data)
 
-    def _set_path(self, path: str, value: Any) -> None:
-        """按 "a.b.c" 路径写入嵌套值，中间层不存在就建出来。"""
-        parts = path.split(".")
-        node = self._data
-        for part in parts[:-1]:
-            child = node.get(part)
-            if not isinstance(child, dict):
-                child = {}
-                node[part] = child
-            node = child
-        node[parts[-1]] = value
 
     def set_root_dir(self, root: str) -> Layout:
         """切换根目录：写引导配置 + 重置 Layout 单例。"""
@@ -230,6 +225,21 @@ class Settings:
                 hint="只支持 uv 或 docker。",
             )
         self.update({"astrbot": {"deploy_mode": mode}})
+
+    def onebot_port(self) -> int:
+        """OneBot 反向 WS 端口：唯一真源是 bridge.onebot_port（FIX-H）。
+
+        astrbot.onebot_port 只为兼容旧 settings.json 而保留，任何读取都先取
+        bridge.onebot_port，再回落旧键，最后回落常量。非法值跳过，不抛异常。
+        """
+        for path in ("bridge.onebot_port", "astrbot.onebot_port"):
+            try:
+                value = int(self.get(path))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= value <= 65535:
+                return value
+        return int(PORT_ONEBOT)
 
     def is_docker(self) -> bool:
         return self.astrbot_deploy_mode() == DEPLOY_DOCKER

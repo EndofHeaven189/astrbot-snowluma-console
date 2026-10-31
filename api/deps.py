@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
-
 from core.constants import DEPLOY_DOCKER, DEPLOY_UV, SERVICE_ASTRBOT, SERVICE_SNOWLUMA
 from core.errors import ConsoleError
 from core.paths import Layout, get_layout
@@ -16,10 +14,6 @@ SERVICES = (SERVICE_ASTRBOT, SERVICE_SNOWLUMA)
 
 def ctx() -> "tuple[Layout, Settings]":
     return get_layout(), get_settings()
-
-
-LAYOUT: Layout = get_layout()
-SETTINGS: Settings = get_settings()
 
 
 def guard_service(service: str) -> str:

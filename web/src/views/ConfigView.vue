@@ -106,7 +106,8 @@ async function restore(name: string) {
   if (!window.confirm('用备份 ' + name + ' 覆盖当前配置？当前文件会再备份一份。')) return
   try {
     const res = await api.restoreBackup(name)
-    toast.ok('已从备份还原', res.path || name)
+    // FIX-S：后端返回字段是 restored，不是 path。
+    toast.ok('已从备份还原', res.restored || name)
     await loadFile()
     await loadBackups()
   } catch (err) {

@@ -1,25 +1,31 @@
 // 与后端 Pydantic/dataclass 结构对应的最小类型集合
 
+// 字段名以后端为准（FIX-E）：后端返回 status / group / required，不是 state / route。
 export interface CheckItem {
   id: string
   label: string
-  state: 'ok' | 'warn' | 'fail' | 'pending' | string
-  value?: string | null
+  group: 'common' | 'uv' | 'docker' | 'snowluma' | string
+  scope: 'common' | 'uv' | 'docker' | 'snowluma' | string
+  status: 'ok' | 'warn' | 'fail' | 'pending' | string
+  value?: string | number | null
   detail?: string | null
   hint?: string | null
-  scope?: 'common' | 'uv' | 'docker' | string
-  route?: string | null
+  required?: boolean
 }
 
+// 检查时间字段是 checked_at（FIX-BE），不是 detect_at。
 export interface DetectResult {
   route: string | null
+  checked_at: string
+  duration_ms: number
+  cached: boolean
   checks: CheckItem[]
-  summary: { ok: number; warn: number; fail: number; pending: number; total: number }
+  summary: { ok: number; warn: number; fail: number; pending: number; total?: number }
   blocking: string[]
   can_install: boolean
   root: string
+  app_version: string
   endpoints?: Record<string, string>
-  detect_at?: string
 }
 
 export interface CaptureStatus {
@@ -65,6 +71,8 @@ export interface BridgeEndpoint {
   reachable?: boolean | null
   reason?: string | null
   error?: string
+  /** Docker 路线容器内探测结果（FIX-AH 会同时提升到顶层） */
+  resolved?: Record<string, unknown>
 }
 
 export interface ServiceStatus {

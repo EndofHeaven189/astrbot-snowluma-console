@@ -37,9 +37,29 @@ def apply(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return result
 
 
+# 容器内探测结果需要提到顶层的字段（FIX-AH）
+_RESOLVED_TOP_LEVEL = (
+    "reachable",
+    "reason",
+    "strategy",
+    "url",
+    "host",
+    "port",
+    "network_mode",
+    "note",
+    "candidates",
+)
+
+
 @router.get("/endpoint")
 def endpoint(refresh: bool = False) -> Dict[str, Any]:
-    """FIX-02：当前路线下 SnowLuma 应该连到哪一个地址。"""
+    """FIX-02：当前路线下 SnowLuma 应该连到哪一个地址。
+
+    FIX-F / FIX-AH：前端 client.ts 声明的返回体是 `{endpoint: BridgeEndpoint}`，
+    这里以前直接返回裸 endpoint 对象，页面拿到的永远是 undefined；而且容器内探测
+    结果原本只塞在 `resolved` 里，前端读的是 `endpoint.reachable`，
+    所以「容器连不上宿主机」的报警根本不触发。现在包一层，并把 resolved 合并到顶层。
+    """
     settings = get_settings()
     layout = get_layout()
     data = bridge_endpoint(settings=settings, layout=layout)
@@ -48,10 +68,14 @@ def endpoint(refresh: bool = False) -> Dict[str, Any]:
         resolver = getattr(controller, "resolve_bridge_endpoint", None)
         if callable(resolver) and refresh:
             try:
-                data["resolved"] = resolver()
-            except Exception as exc:
-                data["resolved"] = {"reachable": False, "reason": "probe_error", "error": str(exc)}
-    return data
+                resolved = resolver()
+            except Exception as exc:  # noqa: BLE001 - 探测失败要能显示原因，而不是 500
+                resolved = {"reachable": False, "reason": "probe_error", "error": str(exc)}
+            data["resolved"] = resolved
+            for key in _RESOLVED_TOP_LEVEL:
+                if key in resolved:
+                    data[key] = resolved[key]
+    return {"endpoint": data}
 
 
 @router.post("/fallback")

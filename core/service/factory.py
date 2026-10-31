@@ -9,7 +9,6 @@ from core.constants import (
     DEPLOY_DOCKER,
     DEPLOY_UV,
     LOOPBACK,
-    PORT_ONEBOT,
     SERVICE_ASTRBOT,
     SERVICE_SNOWLUMA,
 )
@@ -45,9 +44,11 @@ def venv_astrbot_exe(layout: Layout) -> Optional[str]:
 
 
 def venv_python_exe(layout: Layout) -> Optional[str]:
-    return get_platform().venv_executable(layout.astrbot_venv, "python") or get_platform().venv_executable(
-        layout.astrbot_venv, "python3"
-    )
+    """venv 里的 Python 解释器；venv 不存在或探测不到都返回 None（FIX-C）。"""
+    exe = get_platform().venv_executable(layout.astrbot_venv, "python")
+    if exe:
+        return exe
+    return get_platform().venv_executable(layout.astrbot_venv, "python3")
 
 
 def astrbot_uv_version(layout: Layout) -> Optional[str]:
@@ -94,6 +95,12 @@ def snowluma_entry(layout: Layout) -> str:
 
 
 def snowluma_env(layout: Layout, settings: Optional[Settings] = None) -> Dict[str, str]:
+    """SnowLuma 的启动环境变量。
+
+    FIX-G：这里会顺带生成引导密码，所以只能「真正启动之前」调用，
+    不能挂在构造控制器上——get_controller() 被 /api/service/status 每 4 秒调一次，
+    以前服务还没跑过就先把自己的随机密码标成 captured，并渲染出 ?token=<随机串>。
+    """
     from core.credential.eula import accepted_flags
     from core.credential.snowluma import ensure_admin_password
 
@@ -112,7 +119,8 @@ def snowluma_env(layout: Layout, settings: Optional[Settings] = None) -> Dict[st
 def _build_astrbot(settings: Settings, layout: Layout) -> ServiceController:
     mode = settings.astrbot_deploy_mode()
     port = int(settings.get("astrbot.dashboard_port", 6185))
-    bridge_port = int(settings.get("astrbot.onebot_port", PORT_ONEBOT))
+    # FIX-H：桥接端口只有一个真源 bridge.onebot_port（老配置回落 astrbot.onebot_port）。
+    bridge_port = settings.onebot_port()
     url = f"http://{LOOPBACK}:{port}"
 
     if mode == DEPLOY_DOCKER:
@@ -170,8 +178,6 @@ def _require_astrbot_init(project_dir: str) -> None:
     if os.path.exists(os.path.join(project_dir, ".astrbot")):
         return
     # 4.x 有的版本只在 data/cmd_config.json 留痕，也算初始化过
-    from core.paths import get_layout as _layout
-
     if os.path.exists(os.path.join(project_dir, "data", "cmd_config.json")):
         return
     raise ServiceError(
@@ -209,7 +215,8 @@ def _build_snowluma(settings: Settings, layout: Layout) -> ServiceController:
         version_getter=lambda: snowluma_version(layout),
         port=port,
         ready_url=f"http://{LOOPBACK}:{port}",
-        env_extra=snowluma_env(layout, settings),
+        # FIX-G：惰性求值——密码只在 start() 构建 env 时才生成。
+        env_extra=lambda: snowluma_env(layout, settings),
         shell=shell,
     )
 

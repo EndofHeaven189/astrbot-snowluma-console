@@ -32,7 +32,8 @@ const services = [
         </button>
       </div>
 
-      <LogPanel :key="service" :service="service" height="calc(100vh - 320px)" />
+      <!-- FIX-BQ：与 ServicesView 一致，切换服务由 LogPanel 内部 watch 处理，不要 :key 重挂载 -->
+      <LogPanel :service="service" height="calc(100vh - 320px)" />
     </div>
   </div>
 </template>

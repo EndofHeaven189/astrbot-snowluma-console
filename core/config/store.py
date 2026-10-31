@@ -20,7 +20,6 @@ from core.paths import Layout, get_layout
 from core.settings import Settings, get_settings
 from core.utils import (
     atomic_write_json,
-    file_size_mb,
     now_iso,
     read_json,
     timestamp_slug,
@@ -49,10 +48,12 @@ SPECS: Dict[str, List[ConfigFileSpec]] = {
 
 
 def _pick_config_dir(layout: Layout, settings: Settings) -> str:
-    """SnowLuma 的 config 目录相对进程 cwd，优先用 instances 下的数据目录。"""
-    override = settings.get("snowluma.config_dir")
-    if isinstance(override, str) and override.strip():
-        return override
+    """SnowLuma 的 config 目录相对进程 cwd，优先用 instances 下的数据目录。
+
+    FIX-BG：以前这里读 snowluma.config_dir，但 DEFAULT_SETTINGS 里没有这个键，
+    分支永远走不到（死代码）。要么补默认值并在设置页暴露入口，要么删掉；
+    这里按后者处理，保留注释说明，避免下次又有人以为它能用。
+    """
     candidates = [
         layout.snowluma_config_dir,
         os.path.join(layout.snowluma_app, "config"),
@@ -294,14 +295,24 @@ def restore_backup(
     target = meta.get("file")
     if not target or not isinstance(target, str):
         raise BackupError("备份缺少原始路径信息，无法自动还原", detail={"name": safe})
+    # FIX-AN：还原目标直接取自备份里的 _meta.file，没有任何约束，可以写到布局之外。
+    # 只允许落在当前数据根目录内。
+    root_prefix = os.path.normcase(os.path.abspath(layout.root))
+    target_abs = os.path.normcase(os.path.abspath(target))
+    if target_abs != root_prefix and not target_abs.startswith(root_prefix + os.sep):
+        raise BackupError(
+            "备份记录的原始路径不在当前数据目录内，已拒绝还原",
+            hint="这条备份可能来自另一个数据根目录；请只还原当前 root 下的配置，或先切回那个 root。",
+            detail={"name": safe, "target": target, "root": layout.root},
+        )
     service = meta.get("service")
     store = ConfigStore(layout, settings)
     file_id: Optional[str] = None
     if service == SERVICE_ASTRBOT:
         file_id = "cmd_config"
     elif service == SERVICE_SNOWLUMA:
-        stem = os.path.splitext(os.path.basename(target))[0]
-        file_id = stem if stem in ("runtime", "onebot") else stem
+        # FIX-AB：两个分支等价，直接取文件名主干。
+        file_id = os.path.splitext(os.path.basename(target))[0]
     if file_id is None:
         raise BackupError("无法判断备份对应的配置项", detail={"name": safe, "target": target})
     current_backup = store.backup(service, file_id, reason="before-restore")

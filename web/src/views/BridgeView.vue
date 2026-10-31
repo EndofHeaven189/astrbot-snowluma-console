@@ -295,7 +295,7 @@ onMounted(load)
       <div v-if="isDocker" class="card" style="padding: 12px; margin-top: 12px">
         <b>Docker 路线专项排查</b>
         <ol class="dim" style="font-size: 12.5px; line-height: 1.85; padding-left: 18px; margin: 8px 0 0">
-          <li>执行 <span class="mono">docker ps</span>，确认 6199 端口映射显示为 <span class="mono">0.0.0.0:6199-&gt;6199/tcp</span>（WSL2 下只绑 127.0.0.1 时 Windows 侧常连不上）。</li>
+          <li>执行 <span class="mono">docker ps</span>，确认 {{ port }} 端口映射显示为 <span class="mono">0.0.0.0:{{ port }}-&gt;{{ port }}/tcp</span>（WSL2 下只绑回环地址时 Windows 侧常连不上）。</li>
           <li>点上面的「容器内自动探测」：控制台会在容器里尝试 host.docker.internal 与局域网 IP，取第一个可达的。</li>
           <li>都不可达时点「一键切换退路」，把 AstrBot 改为 <span class="mono">network_mode: host</span> 并重新生成 compose，然后重启 AstrBot。</li>
         </ol>

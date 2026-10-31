@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -17,10 +17,10 @@ from core.installer.jobs import INSTALLER_CHANNEL, get_registry
 from core.loghub import get_loghub
 from core.paths import get_layout
 from core.service import lifecycle
-from core.service.factory import get_controller, snowluma_installed
+from core.service.factory import get_controller
 from core.settings import get_settings
 
-from api.deps import guard_service, parse_bool
+from api.deps import guard_service
 
 router = APIRouter(prefix="/api/service", tags=["service"])
 
@@ -89,9 +89,11 @@ async def _lifecycle(
 
     payload: Dict[str, Any] = {"service": service, "action": action, "status": st.to_dict()}
     if service == SERVICE_SNOWLUMA and action in ("start", "restart"):
-        # 兜底：某些版本忽略环境变量仍会打印一次性密码
+        # 兜底：某些版本忽略环境变量仍会打印一次性密码。
+        # FIX-AV：read_log 在 Docker 路线下会同步跑 docker logs（超时 45 秒），
+        # 所以放到线程里，别卡住事件循环。
         try:
-            lines = controller.read_log(tail=200)
+            lines = await asyncio.to_thread(controller.read_log, 200)
             pwd = capture_from_logs(lines)
             payload["login_url"] = login_url(pwd)
         except Exception:

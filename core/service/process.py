@@ -16,7 +16,7 @@ import asyncio
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.constants import LOOPBACK, STOP_GRACE_SECONDS
 from core.errors import ServiceError
@@ -30,6 +30,38 @@ from core.utils import tail_lines
 # 内存中的句柄表：控制台内部重启进程后仍能优雅停止
 _HANDLES: Dict[str, ProcessHandle] = {}
 _HANDLE_LOCK = threading.RLock()
+
+# 端口探测失败只提示一次，避免 4 秒轮询把日志刷满
+_REPORTED_PORT_ERRORS: set = set()
+
+
+def _safe_port_owner(port: int) -> Optional[Tuple[int, str]]:
+    """端口→进程探测的兜底（FIX-AG）。
+
+    适配器可能抛 NotSupportedError（Linux 占位实现）或 netstat 失败；
+    这里一律按「没人占用」处理并记一次日志，绝不让 status()/start()/kill_residual()
+    因为端口探测失败而整体变 501。
+    """
+    try:
+        return get_platform().find_process_by_port(port)
+    except Exception as exc:  # noqa: BLE001 - 探测失败不能影响状态查询
+        if port not in _REPORTED_PORT_ERRORS:
+            _REPORTED_PORT_ERRORS.add(port)
+            try:
+                get_loghub().append("console", f"[端口探测] {port} 探测失败，按空闲处理：{exc}")
+            except Exception:
+                pass
+        return None
+
+
+def _stop_grace_seconds() -> float:
+    """FIX-I：优先读 settings.timeouts.stop_grace，读不到回落常量。"""
+    try:
+        from core.settings import get_settings
+
+        return float(get_settings().timeout("stop_grace"))
+    except Exception:  # noqa: BLE001 - 设置读失败不能阻断停止流程
+        return float(STOP_GRACE_SECONDS)
 
 
 class ProcessController(ServiceController):
@@ -69,6 +101,8 @@ class ProcessController(ServiceController):
         self._last_exit_code: Optional[int] = None
         self._residual: List[int] = []
         self._ready_detail: Dict[str, Any] = {}
+        # FIX-AW：端口→进程探测的 1.5 秒进程内缓存（netstat 在 Windows 上很慢）
+        self._port_cache: Optional[Tuple[float, int, Optional[Tuple[int, str]]]] = None
 
     # ---------------------------------------------------------------- 状态
     def is_installed(self) -> bool:
@@ -102,8 +136,8 @@ class ProcessController(ServiceController):
             running = adapter.is_running(handle)
             pid = handle.pid if running else None
         port_owner = None
-        if self._port:
-            occupying = adapter.find_process_by_port(self._port)
+        if self._port and installed:
+            occupying = self._cached_port_owner(self._port)
             if occupying and occupying[0] != pid:
                 port_owner = occupying[0]
         version = None
@@ -136,10 +170,24 @@ class ProcessController(ServiceController):
             detail=detail,
         )
 
+    def _cached_port_owner(self, port: int) -> Optional[Tuple[int, str]]:
+        """带 1.5 秒缓存的端口占用查询（FIX-AW）。"""
+        now = time.time()
+        cache = self._port_cache
+        if cache is not None and cache[1] == port and now - cache[0] < 1.5:
+            return cache[2]
+        owner = _safe_port_owner(port)
+        self._port_cache = (now, port, owner)
+        return owner
+
     # ---------------------------------------------------------------- 启动
     def _build_env(self) -> Dict[str, str]:
         env = os.environ.copy()
-        env.update({k: v for k, v in self._env_extra.items() if v is not None})
+        extra = self._env_extra
+        if callable(extra):
+            # FIX-G：SnowLuma 的引导密码只在真正启动时生成，不能让构造控制器产生副作用。
+            extra = extra() or {}
+        env.update({k: v for k, v in (extra or {}).items() if v is not None})
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUNBUFFERED", "1")
         return env
@@ -179,6 +227,8 @@ class ProcessController(ServiceController):
                 capture=True,
                 shell=self._shell,
                 name=self.name,
+                # FIX-L：受控进程要拿得到控制台，优雅停止才不是每次白等宽限期。
+                graceful=True,
             )
         except OSError as exc:
             hub.append(self.name, f"[启动失败] {exc}")
@@ -210,8 +260,7 @@ class ProcessController(ServiceController):
     def _not_ready_error(self) -> ServiceError:
         """就绪失败时把现场打包进异常：退出码 / 端口占用方 / 最后 200 行日志。"""
         logs = self.read_log(tail=200)
-        adapter = get_platform()
-        owner = adapter.find_process_by_port(self._port) if self._port else None
+        owner = _safe_port_owner(self._port) if self._port else None
         detail: Dict[str, Any] = {
             "service": self.name,
             "port": self._port,
@@ -261,7 +310,14 @@ class ProcessController(ServiceController):
                     current = _HANDLES.get(service)
                     if current is not None and current.pid == handle.pid:
                         _HANDLES.pop(service, None)
-                registry.forget(service)
+                # FIX-W：只清理「自己这一条」注册记录。崩溃后快速重启时旧进程的日志泵
+                # 晚一步收尾，会把新进程刚写进去的 pid 删掉，导致 UI 看不到新实例。
+                try:
+                    entry = registry.get(service)
+                    if isinstance(entry, dict) and int(entry.get("pid") or 0) == handle.pid:
+                        registry.forget(service)
+                except Exception:
+                    pass
                 # FIX-04：进程结束后抓到密码也照样入库（很多程序退出前才打印）
                 from core.credential.capture import finish_capture
 
@@ -284,13 +340,14 @@ class ProcessController(ServiceController):
                 adapter.graceful_stop(pid)
             except Exception:
                 pass
-            deadline = time.time() + STOP_GRACE_SECONDS
+            grace = _stop_grace_seconds()
+            deadline = time.time() + grace
             while time.time() < deadline:
                 if not adapter.is_running(handle):
                     break
                 await asyncio.sleep(0.5)
             else:
-                hub.append(self.name, f"优雅终止超时 {STOP_GRACE_SECONDS}s，强制结束进程树")
+                hub.append(self.name, f"优雅终止超时 {grace:g}s，强制结束进程树")
                 force = True
         if force or adapter.is_running(handle):
             adapter.kill_tree(pid, force=True)
@@ -300,7 +357,7 @@ class ProcessController(ServiceController):
         # FIX-06：确认端口真的释放了；没释放就是有残留子进程，留给 UI 一键清理
         for _ in range(10):
             await asyncio.sleep(0.3)
-            if not self._port or not adapter.find_process_by_port(self._port):
+            if not self._port or not _safe_port_owner(self._port):
                 break
         self._residual = self._port_residual()
         if self._residual:
@@ -310,7 +367,7 @@ class ProcessController(ServiceController):
     def _port_residual(self) -> List[int]:
         if not self._port:
             return []
-        occupying = get_platform().find_process_by_port(self._port)
+        occupying = _safe_port_owner(self._port)
         return [occupying[0]] if occupying else []
 
     def kill_residual(self) -> List[int]:
@@ -351,6 +408,9 @@ class ProcessController(ServiceController):
             "port": port,
             "url": f"ws://{host}:{port}/ws" if port else None,
             "strategy": "loopback",
+            # 契约：reachable 始终存在（未探测时为 None），前端读 endpoint.reachable 不会 undefined
+            "reachable": None,
+            "reason": None,
             "candidates": [{"host": host, "reachable": None, "via": "same-namespace"}],
             "note": "原生进程与 SnowLuma 同在本机，回环地址即可。",
         }

@@ -15,7 +15,7 @@ import socket
 import sys
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -180,12 +180,16 @@ def _port_is_free(host: str, port: int) -> bool:
     return True
 
 
-def _pick_port(host: str, wanted: int, span: int = 20) -> int:
-    """在 wanted 之后找一个能用的端口；找不到就返回 wanted 让调用方报错。"""
+def _pick_port(host: str, wanted: int, span: int = 20) -> Optional[int]:
+    """在 wanted 之后找一个能用的端口；找不到返回 None（FIX-K / FIX-AP）。
+
+    以前找不到时返回 wanted，而调用方拿返回值与 port 比（永远不等），
+    于是「附近也没有可用端口」的分支是死代码。
+    """
     for candidate in range(wanted, wanted + span):
         if _port_is_free(host, candidate):
             return candidate
-    return wanted
+    return None
 
 
 def _pause_on_failure(code: int) -> None:
@@ -223,7 +227,7 @@ def main(argv: List[str] | None = None) -> int:
     # 端口被别的进程占着时直接闪退对使用者毫无信息量：自动换一个可用端口继续跑。
     if not _port_is_free(host, port):
         fallback = _pick_port(host, port + 1)
-        if fallback == port:
+        if fallback is None:
             print("[console] 端口 %d 已被占用，附近也没有可用端口" % port, flush=True)
             return 1
         print("[console] 端口 %d 已被占用，改用 %d" % (port, fallback), flush=True)

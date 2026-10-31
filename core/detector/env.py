@@ -12,8 +12,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,16 +28,13 @@ from core.constants import (
     MIN_PYTHON,
     PORT_ASTRBOT_DASHBOARD,
     PORT_CONSOLE,
-    PORT_ONEBOT,
     PORT_SNOWLUMA_HTTP,
     PORT_SNOWLUMA_WEBUI,
     PORT_SNOWLUMA_WS,
     SNOWLUMA_REPO,
-    SERVICE_ASTRBOT,
-    SERVICE_SNOWLUMA,
 )
 from core.paths import Layout, get_layout
-from core.platform import get_platform
+from core.platform import get_platform, scan_ports
 from core.pythonenv import candidate_exes, probe_version
 from core.service.factory import astrbot_uv_version, snowluma_version
 from core.settings import Settings, get_settings
@@ -331,25 +326,59 @@ def _check_writable(layout: Layout) -> Dict[str, Any]:
     )
 
 
+def _port_setting(settings: Settings, path: str, default: int) -> int:
+    """读端口设置，非法值回落默认（不因为一条脏数据让整次检测崩掉）。"""
+    try:
+        value = int(settings.get(path, default))
+    except (TypeError, ValueError):
+        return int(default)
+    return value if 1 <= value <= 65535 else int(default)
+
+
 def _check_ports(settings: Settings) -> List[Dict[str, Any]]:
-    adapter = get_platform()
+    """端口占用检测（FIX-D / FIX-BF / FIX-AI）。
+
+    adapter.check_port() 的契约是「占用返回进程名，空闲返回 None」，这里以前却把它
+    当 PortState 用（getattr(state, "in_use") 对字符串恒为 False），于是占用的端口
+    也一律判「空闲」。现在统一走 core.platform.scan_ports()（正确的 PortState 实现）；
+    「由本控制台占用」比的是设置里的实际 console.port，不是常量 8765。
+    """
+    console_port = _port_setting(settings, "console.port", PORT_CONSOLE)
     targets = [
-        (PORT_CONSOLE, "控制台", True),
-        (int(settings.get("astrbot.dashboard_port", PORT_ASTRBOT_DASHBOARD)), "AstrBot 面板", True),
-        (int(settings.get("bridge.onebot_port", PORT_ONEBOT)), "OneBot 反向 WS", True),
-        (int(settings.get("snowluma.webui_port", PORT_SNOWLUMA_WEBUI)), "SnowLuma WebUI", True),
-        (int(settings.get("snowluma.http_port", PORT_SNOWLUMA_HTTP)), "SnowLuma HTTP", False),
-        (int(settings.get("snowluma.ws_port", PORT_SNOWLUMA_WS)), "SnowLuma WS", False),
+        (console_port, "控制台", True, True),
+        (
+            _port_setting(settings, "astrbot.dashboard_port", PORT_ASTRBOT_DASHBOARD),
+            "AstrBot 面板",
+            True,
+            False,
+        ),
+        (settings.onebot_port(), "OneBot 反向 WS", True, False),
+        (
+            _port_setting(settings, "snowluma.webui_port", PORT_SNOWLUMA_WEBUI),
+            "SnowLuma WebUI",
+            True,
+            False,
+        ),
+        (
+            _port_setting(settings, "snowluma.http_port", PORT_SNOWLUMA_HTTP),
+            "SnowLuma HTTP",
+            False,
+            False,
+        ),
+        (_port_setting(settings, "snowluma.ws_port", PORT_SNOWLUMA_WS), "SnowLuma WS", False, False),
     ]
-    out: List[Dict[str, Any]] = []
+    unique: List[Tuple[int, str, bool, bool]] = []
     seen = set()
-    for port, label, required in targets:
-        if port in seen:
+    for port, label, required, self_owned in targets:
+        if port in seen or not (1 <= port <= 65535):
             continue
         seen.add(port)
-        state = adapter.check_port(port)
-        self_owned = port == PORT_CONSOLE
-        if state is None or not getattr(state, "in_use", False):
+        unique.append((port, label, required, self_owned))
+
+    states = scan_ports([item[0] for item in unique])
+    out: List[Dict[str, Any]] = []
+    for (port, label, required, self_owned), state in zip(unique, states):
+        if not state.in_use:
             out.append(
                 _check(f"port_{port}", f"端口 {port}（{label}）", STATUS_OK, "空闲", required=required, value=port)
             )
@@ -358,7 +387,7 @@ def _check_ports(settings: Settings) -> List[Dict[str, Any]]:
                 _check(f"port_{port}", f"端口 {port}（{label}）", STATUS_OK, "由本控制台占用", required=True, value=port)
             )
         else:
-            proc = f"{state.process}({state.pid})" if getattr(state, "process", None) else "其他进程"
+            proc = f"{state.process}({state.pid})" if state.process else "其他进程"
             out.append(
                 _check(
                     f"port_{port}",

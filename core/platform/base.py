@@ -94,8 +94,14 @@ class PlatformAdapter(ABC):
         capture: bool = True,
         shell: bool = False,
         name: str = "",
+        graceful: bool = False,
     ) -> ProcessHandle:
-        """启动一个子进程。capture=True 时 stdout/stderr 合并为管道供日志采集。"""
+        """启动一个子进程。capture=True 时 stdout/stderr 合并为管道供日志采集。
+
+        graceful=True 表示这是「受控进程」（AstrBot / SnowLuma 这类需要优雅退出的
+        长期服务）：适配器必须保证它拿到一个可以用来收信号的上下文，这样
+        graceful_stop() 才真的有效，而不是每次都白等宽限期再强杀（FIX-L）。
+        """
 
     @abstractmethod
     def kill(self, handle: ProcessHandle, force: bool = False) -> bool:
@@ -126,11 +132,13 @@ class PlatformAdapter(ABC):
         """读取进程命令行（启动自检判断遗留 pid 是否属于本控制台的服务）。"""
 
     @abstractmethod
-    def venv_executable(self, venv_dir: str, name: str) -> str:
-        """虚拟环境内可执行文件的路径。
+    def venv_executable(self, venv_dir: str, name: str) -> Optional[str]:
+        """虚拟环境内可执行文件的路径；**不存在就返回 None**（FIX-C）。
 
-        统一入口：Windows 是 <venv>\\Scripts\\<name>.exe，POSIX 是 <venv>/bin/<name>。
-        业务代码不得自己拼 Scripts / bin（FIX-01）。
+        统一入口：Windows 按 <name> → <name>.exe → <name>.cmd → <name>.bat 探测，
+        POSIX 是 <venv>/bin/<name>。业务代码不得自己拼 Scripts / bin（FIX-01）。
+        以前不管存不存在都拼一个路径返回，调用方据此以为 venv 已就绪，
+        结果 uv pip install --python <不存在的解释器> 失败。
         """
 
     # ---------------------------------------------------------------- 网络
